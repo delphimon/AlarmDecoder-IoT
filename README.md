@@ -509,7 +509,7 @@ Examples:
 ad2source = C 4:36
 ```
 ###  5.2. <a name='ser2sock-server-component'></a>Ser2sock server component
-Ser2sock allows sharing of a serial device over a TCP/IP network. It also supports encryption and authentication via OpenSSL. Typically configured for port 10000 several home automation systems are able to use this protocol to talk to the AlarmDecoder device for a raw stream of messages. Please be advised that network scanning of this port can lead to alarm faults. It is best to use the Access Control List feature to only allow specific hosts to communicate directly with the AD2* and the alarm panel.
+Ser2sock allows sharing of a serial device over a TCP/IP network. This embedded implementation exposes a plain, unencrypted TCP stream on port 10000; it does not implement the TLS options available in the upstream ser2sock utility. Several home automation systems, including Home Assistant, can use this raw stream to talk to the AlarmDecoder device. Please be advised that network scanning of this port can lead to alarm faults. Use the Access Control List feature to allow only trusted hosts, and keep the service on a trusted or isolated network.
 
 ####  5.2.1. <a name='configuration-for-ser2sock-server'></a>Configuration tool for Ser2sock server
 ```console

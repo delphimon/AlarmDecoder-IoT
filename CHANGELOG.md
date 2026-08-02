@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - [ ] CORE: Push includes down to lower level. main include has too many component specific includes.
 - [ ] CORE: Audit Espressif v3.2 api usage look for more that are soon to be deprecated.
 - [ ] CORE: FIXME: Setting HOST NAME when using static IP over ethernet not working.
-- [ ] CORE: FIXME: reboot of esp32 causes connected ser2sock clients to hang. So far various attempts to fix have been unsuccessful. Will need to do some network captures to determine the problem.
+- [X] SER2SOCKD: Register an ESP shutdown handler that closes listening and client sockets before a software restart, allowing connected clients to detect the disconnect and reconnect. Abrupt power loss still relies on normal TCP timeout behavior.
 - [ ] CORE: HUP/RESTART needs to be centralized so cleanup ex(_fifo_destroy) can happen first. How to connect with STSDK having its own restart calls.
 - [ ] CORE: Noted coredump when doing oil change check and a twilio message goes out. Both are mbedtls web requests. Will need to investigate and possibly serialize web requests.
 - [ ] CORE: Improve: Finish wiring Virtual Switch A & B and Button A & B.

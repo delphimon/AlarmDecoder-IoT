@@ -24,6 +24,9 @@
 // FreeRTOS includes
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
+
+#include <atomic>
 
 // Disable via sdkconfig
 #if CONFIG_AD2IOT_SER2SOCKD
@@ -37,6 +40,7 @@ static const char *TAG = "SER2SOCKD";
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/error.h"
+#include "esp_system.h"
 
 // specific includes
 #include "ser2sock.h"
@@ -46,7 +50,7 @@ static const char *TAG = "SER2SOCKD";
 #define PORT 10000
 #define MAX_CLIENTS 4
 #define MAX_FIFO_BUFFERS 30
-#define MAXCONNECTIONS MAX_CLIENTS+1
+#define MAXCONNECTIONS (MAX_CLIENTS+1)
 
 #define SD2D_COMMAND          "ser2sockd"
 #define S2SD_SUBCMD_ENABLE    "enable"
@@ -68,7 +72,8 @@ typedef struct {
 } fifo;
 
 typedef struct {
-    int size;
+    size_t size;
+    size_t offset;
     unsigned char buffer[];
 } fifo_buffer;
 
@@ -80,20 +85,24 @@ typedef struct {
     /* the fd */
     int fd;
 
+    /* Set by a producer when a client must be closed by the server task. */
+    bool disconnect_requested;
+
     /* the buffer */
     fifo send_buffer;
 } FDs;
 
 // fifo buffer stuff
 static void _fifo_init(fifo *f, int size);
-static void _fifo_destroy(fifo *f);
 static int _fifo_empty(fifo *f);
-static void* _fifo_make_buffer(void *in_buffer, unsigned int len);
+static void* _fifo_make_buffer(void *in_buffer, size_t len);
 static int _fifo_add(fifo *f, void *next);
+static void* _fifo_peek(fifo *f);
 static void* _fifo_get(fifo *f);
 static void _fifo_clear(fifo *f);
+static int _cleanup_fd(int n);
+static void ser2sockd_shutdown(void);
 
-int socket_timeout = 10;
 int listen_backlog = 10;
 
 FDs my_fds[MAXCONNECTIONS];
@@ -101,6 +110,11 @@ FDs my_fds[MAXCONNECTIONS];
 /* our listen socket */
 int listen_sock = -1;
 struct sockaddr_in serv_addr;
+
+/* Protects connection state and the per-client producer/consumer FIFOs. */
+static SemaphoreHandle_t fds_mutex = NULL;
+static std::atomic_bool ser2sockd_shutting_down(false);
+static bool shutdown_handler_registered = false;
 
 /* ACL control */
 ad2_acl_check ser2sock_acl;
@@ -230,6 +244,24 @@ void ser2sockd_register_cmds()
  */
 void ser2sockd_init(void)
 {
+    if (fds_mutex == NULL) {
+        fds_mutex = xSemaphoreCreateMutex();
+        if (fds_mutex == NULL) {
+            ESP_LOGE(TAG, "Unable to create connection-state mutex");
+            return;
+        }
+    }
+
+    if (!shutdown_handler_registered) {
+        esp_err_t shutdown_handler_result = esp_register_shutdown_handler(ser2sockd_shutdown);
+        if (shutdown_handler_result == ESP_OK) {
+            shutdown_handler_registered = true;
+        } else {
+            ESP_LOGW(TAG, "Unable to register shutdown handler: %s",
+                     esp_err_to_name(shutdown_handler_result));
+        }
+    }
+
     // load and parse ACL if set or set default to allow all.
     std::string acl = "0.0.0.0/0";
     ad2_get_config_key_string(S2SD_CONFIG_SECTION, S2SD_SUBCMD_ACL, acl);
@@ -245,7 +277,16 @@ void ser2sockd_init(void)
         my_fds[x].inuse = false;
         my_fds[x].fd = -1;
         my_fds[x].fd_type = NA;
+        my_fds[x].disconnect_requested = false;
         _fifo_init(&my_fds[x].send_buffer, MAX_FIFO_BUFFERS);
+        if (my_fds[x].send_buffer.table == NULL) {
+            ESP_LOGE(TAG, "Unable to allocate send queue for slot %d", x);
+            for (int y = 0; y < x; y++) {
+                free(my_fds[y].send_buffer.table);
+                my_fds[y].send_buffer.table = NULL;
+            }
+            return;
+        }
     }
 
     bool en = false;
@@ -287,23 +328,6 @@ static int _fifo_empty(fifo *f)
 }
 
 /*
- free up any memory we allocated
- */
-static void _fifo_destroy(fifo *f)
-{
-    int i;
-    if (!_fifo_empty(f)) {
-        free(f->table);
-    } else {
-        for (i = f->out; i < f->in; i++) {
-            /* free actual block of memory */
-            free(f->table[i]);
-        }
-        free(f->table);
-    }
-}
-
-/*
  remove all stored pending data
  */
 static void _fifo_clear(fifo *f)
@@ -326,7 +350,7 @@ static void _fifo_clear(fifo *f)
 	this has a specific type where all the other fifo low level routines
 	are all void *.
  */
-static void* _fifo_make_buffer(void *in_buffer, unsigned int len)
+static void* _fifo_make_buffer(void *in_buffer, size_t len)
 {
     fifo_buffer* out_buffer;
 
@@ -334,9 +358,13 @@ static void* _fifo_make_buffer(void *in_buffer, unsigned int len)
     if (!len) {
         len = strlen((const char *)in_buffer);
     }
-    out_buffer = (fifo_buffer *)malloc(sizeof(out_buffer->size)+len);
+    out_buffer = (fifo_buffer *)malloc(sizeof(fifo_buffer)+len);
+    if (!out_buffer) {
+        return NULL;
+    }
     memcpy(out_buffer->buffer, in_buffer, len);
     out_buffer->size = len;
+    out_buffer->offset = 0;
     return (void*) out_buffer;
 }
 
@@ -346,7 +374,7 @@ static void* _fifo_make_buffer(void *in_buffer, unsigned int len)
  */
 static int _fifo_add(fifo *f, void *next)
 {
-    if (f->avail == f->size) {
+    if (!f->table || !next || f->avail == f->size) {
         return (0);
     } else {
         f->table[f->in] = next;
@@ -354,6 +382,17 @@ static int _fifo_add(fifo *f, void *next)
         f->in = (f->in + 1) % f->size;
         return (1);
     }
+}
+
+/*
+ return the next element without removing it
+ */
+static void* _fifo_peek(fifo *f)
+{
+    if (f->avail > 0) {
+        return f->table[f->out];
+    }
+    return NULL;
 }
 
 /*
@@ -377,24 +416,46 @@ static void* _fifo_get(fifo *f)
  */
 static int _cleanup_fd(int n)
 {
+    int fd = -1;
 
-    /* don't do anything unless its in was active */
-    if (my_fds[n].inuse) {
-        /* close the fd */
-        close(my_fds[n].fd);
-        my_fds[n].fd = -1;
+    if (n < 0 || n >= MAXCONNECTIONS || fds_mutex == NULL) {
+        return false;
+    }
 
-        /* clear any data we have saved */
-        _fifo_clear(&my_fds[n].send_buffer);
+    if (xSemaphoreTake(fds_mutex, portMAX_DELAY) == pdTRUE) {
+        /* Mark the slot unused before closing so producers stop queueing. */
+        if (my_fds[n].inuse) {
+            fd = my_fds[n].fd;
+            my_fds[n].fd = -1;
+            my_fds[n].inuse = false;
+            my_fds[n].fd_type = NA;
+            my_fds[n].disconnect_requested = false;
+            _fifo_clear(&my_fds[n].send_buffer);
+        }
+        xSemaphoreGive(fds_mutex);
+    }
 
-        /* mark the element as free for reuse */
-        my_fds[n].inuse = false;
-
-        /* set the type to null */
-        my_fds[n].fd_type = NA;
-
+    if (fd >= 0) {
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+        if (fd == listen_sock) {
+            listen_sock = -1;
+        }
     }
     return true;
+}
+
+/*
+ Close all sockets before esp_restart() resets the network stack. This gives
+ connected Home Assistant clients an immediate close/RST instead of leaving a
+ half-open TCP session behind.
+ */
+static void ser2sockd_shutdown(void)
+{
+    ser2sockd_shutting_down = true;
+    for (int n = 0; n < MAXCONNECTIONS; n++) {
+        _cleanup_fd(n);
+    }
 }
 
 /*
@@ -403,21 +464,35 @@ static int _cleanup_fd(int n)
  */
 void ser2sockd_sendall(uint8_t *buffer, size_t len)
 {
-    void * tempbuffer;
-    int n;
+    uint32_t disconnect_slots = 0;
+
+    if (!buffer || !len || fds_mutex == NULL || ser2sockd_shutting_down) {
+        return;
+    }
 
     /*
      Adding anything to the fifo must be allocated so it can be free'd later
      Not very efficient but we have plenty of mem with as few connections as we
      will use. If we needed many more I would need to re-factor this code
      */
-    for (n = 0; n < MAXCONNECTIONS; n++) {
-        if (my_fds[n].inuse == true) {
-            if (my_fds[n].fd_type == CLIENT_SOCKET) {
-                /* caller of fifo_get must free this */
-                tempbuffer = _fifo_make_buffer(buffer, len);
-                _fifo_add(&my_fds[n].send_buffer, tempbuffer);
+    if (xSemaphoreTake(fds_mutex, portMAX_DELAY) == pdTRUE) {
+        for (int n = 0; n < MAXCONNECTIONS; n++) {
+            if (my_fds[n].inuse && my_fds[n].fd_type == CLIENT_SOCKET &&
+                    !my_fds[n].disconnect_requested) {
+                void *tempbuffer = _fifo_make_buffer(buffer, len);
+                if (!tempbuffer || !_fifo_add(&my_fds[n].send_buffer, tempbuffer)) {
+                    free(tempbuffer);
+                    my_fds[n].disconnect_requested = true;
+                    disconnect_slots |= (1U << n);
+                }
             }
+        }
+        xSemaphoreGive(fds_mutex);
+    }
+
+    for (int n = 0; n < MAXCONNECTIONS; n++) {
+        if (disconnect_slots & (1U << n)) {
+            ESP_LOGW(TAG, "Closing slow client in slot %d: send queue exhausted", n);
         }
     }
 }
@@ -433,13 +508,20 @@ static void _build_fdsets(fd_set *read_fdset, fd_set *write_fdset, fd_set *excep
     FD_ZERO(read_fdset);
     FD_ZERO(write_fdset);
     FD_ZERO(except_fdset);
+    if (fds_mutex == NULL || xSemaphoreTake(fds_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
     for (n = 0; n < MAXCONNECTIONS; n++) {
-        if (my_fds[n].inuse == true) {
-            FD_SET(my_fds[n].fd,read_fdset);
-            FD_SET(my_fds[n].fd,write_fdset);
-            FD_SET(my_fds[n].fd,except_fdset);
+        if (my_fds[n].inuse && !my_fds[n].disconnect_requested) {
+            FD_SET(my_fds[n].fd, read_fdset);
+            FD_SET(my_fds[n].fd, except_fdset);
+            if (my_fds[n].fd_type == CLIENT_SOCKET &&
+                    !_fifo_empty(&my_fds[n].send_buffer)) {
+                FD_SET(my_fds[n].fd, write_fdset);
+            }
         }
     }
+    xSemaphoreGive(fds_mutex);
 }
 
 /*
@@ -447,18 +529,24 @@ static void _build_fdsets(fd_set *read_fdset, fd_set *write_fdset, fd_set *excep
  */
 static bool _poll_exception_fdset(fd_set *except_fdset)
 {
-    int n;
     bool did_work = false;
 
-    for (n = 0; n < MAXCONNECTIONS; n++) {
-        if (my_fds[n].inuse == true) {
-            if (FD_ISSET(my_fds[n].fd,except_fdset)) {
-                if (my_fds[n].fd_type == CLIENT_SOCKET) {
-                    did_work = true;
-                    ESP_LOGE(TAG, "Exception occurred on socket fd slot %i closing the socket. %s",n, strerror(errno));
-                    _cleanup_fd(n);
-                }
+    for (int n = 0; n < MAXCONNECTIONS; n++) {
+        int fd = -1;
+        int fd_type = NA;
+
+        if (xSemaphoreTake(fds_mutex, portMAX_DELAY) == pdTRUE) {
+            if (my_fds[n].inuse) {
+                fd = my_fds[n].fd;
+                fd_type = my_fds[n].fd_type;
             }
+            xSemaphoreGive(fds_mutex);
+        }
+
+        if (fd >= 0 && fd_type == CLIENT_SOCKET && FD_ISSET(fd, except_fdset)) {
+            did_work = true;
+            ESP_LOGE(TAG, "Exception occurred on socket fd slot %i closing the socket. %s",n, strerror(errno));
+            _cleanup_fd(n);
         }
     }
     return did_work;
@@ -469,9 +557,7 @@ static bool _poll_exception_fdset(fd_set *except_fdset)
  */
 static void _set_non_blocking(int fd)
 {
-    int nonb = 0;
     int res = 1;
-    nonb |= O_NONBLOCK;
     if (ioctl(fd, FIONBIO, &res) < 0) {
         ESP_LOGE(TAG, "Error setting FIONBIO");
     }
@@ -482,52 +568,86 @@ static void _set_non_blocking(int fd)
  */
 static int _add_fd(int fd, int fd_type)
 {
-    int x;
     int results = -1;
     struct linger solinger;
 
-    for (x = 0; x < MAXCONNECTIONS; x++) {
-        if (my_fds[x].inuse == false) {
-            solinger.l_onoff = true;
-            solinger.l_linger = 0;
-            setsockopt(fd, SOL_SOCKET, SO_LINGER, &solinger, sizeof(solinger));
+    if (fds_mutex == NULL || ser2sockd_shutting_down) {
+        return -1;
+    }
 
-            if (fd_type == CLIENT_SOCKET) {
-                int ret;
-                int keep_alive = 1;
-                ret = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &keep_alive, sizeof(int));
-                if (ret < 0) {
-                    ESP_LOGE(TAG, "socket set keep-alive failed %d", errno);
-                }
+    _set_non_blocking(fd);
 
-                int idle = 10;
-                ret = setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(int));
-                if (ret < 0) {
-                    ESP_LOGE(TAG, "socket set keep-idle failed %d", errno);
-                }
+    solinger.l_onoff = true;
+    solinger.l_linger = 0;
+    setsockopt(fd, SOL_SOCKET, SO_LINGER, &solinger, sizeof(solinger));
 
-                int interval = 5;
-                ret = setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(int));
-                if (ret < 0) {
-                    ESP_LOGE(TAG, "socket set keep-interval failed %d", errno);
-                }
+    if (fd_type == CLIENT_SOCKET) {
+        int ret;
+        int keep_alive = 1;
+        ret = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &keep_alive, sizeof(int));
+        if (ret < 0) {
+            ESP_LOGE(TAG, "socket set keep-alive failed %d", errno);
+        }
 
-                int maxpkt = 3;
-                ret = setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &maxpkt, sizeof(int));
-                if (ret < 0) {
-                    ESP_LOGE(TAG, "socket set keep-count failed %d", errno);
-                }
-            }
+        int idle = 10;
+        ret = setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(int));
+        if (ret < 0) {
+            ESP_LOGE(TAG, "socket set keep-idle failed %d", errno);
+        }
 
-            my_fds[x].inuse = true;
-            my_fds[x].fd_type = fd_type;
-            my_fds[x].fd = fd;
-            results = x;
-            break;
+        int interval = 5;
+        ret = setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(int));
+        if (ret < 0) {
+            ESP_LOGE(TAG, "socket set keep-interval failed %d", errno);
+        }
+
+        int maxpkt = 3;
+        ret = setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &maxpkt, sizeof(int));
+        if (ret < 0) {
+            ESP_LOGE(TAG, "socket set keep-count failed %d", errno);
         }
     }
 
+    if (xSemaphoreTake(fds_mutex, portMAX_DELAY) == pdTRUE) {
+        for (int x = 0; x < MAXCONNECTIONS; x++) {
+            if (my_fds[x].inuse == false) {
+                _fifo_clear(&my_fds[x].send_buffer);
+                my_fds[x].disconnect_requested = false;
+                my_fds[x].inuse = true;
+                my_fds[x].fd_type = fd_type;
+                my_fds[x].fd = fd;
+                results = x;
+                break;
+            }
+        }
+        xSemaphoreGive(fds_mutex);
+    }
+
     return results;
+}
+
+/* Close clients that a producer marked after queue allocation/overflow failure. */
+static void _cleanup_requested_fds(void)
+{
+    uint32_t disconnect_slots = 0;
+
+    if (fds_mutex == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(fds_mutex, portMAX_DELAY) == pdTRUE) {
+        for (int x = 0; x < MAXCONNECTIONS; x++) {
+            if (my_fds[x].inuse && my_fds[x].disconnect_requested) {
+                disconnect_slots |= (1U << x);
+            }
+        }
+        xSemaphoreGive(fds_mutex);
+    }
+
+    for (int x = 0; x < MAXCONNECTIONS; x++) {
+        if (disconnect_slots & (1U << x)) {
+            _cleanup_fd(x);
+        }
+    }
 }
 
 /*
@@ -535,100 +655,108 @@ static int _add_fd(int fd, int fd_type)
  */
 static bool _poll_read_fdset(fd_set *read_fdset)
 {
-    int n, received, newsockfd, added_slot;
+    int received, newsockfd, added_slot;
     bool did_work = false;
     char buffer[1024] = {0};
 
     /* check every socket to find the one that needs read */
-    for (n = 0; n < MAXCONNECTIONS; n++) {
-        if (my_fds[n].inuse == true) {
+    for (int n = 0; n < MAXCONNECTIONS; n++) {
+        int fd = -1;
+        int fd_type = NA;
 
-            /* check read fd */
-            if (FD_ISSET(my_fds[n].fd,read_fdset)) {
-                /*  if this is a listening socket then we accept on it and
-                 * get a new client socket
-                 */
-                if (my_fds[n].fd_type == LISTEN_SOCKET) {
-                    /* clear our state vars */
-                    newsockfd = -1;
-                    {
-                        socklen_t addr_len;
-                        struct sockaddr_storage peer_addr = {};
-                        addr_len = sizeof(peer_addr);
-                        newsockfd = accept(listen_sock, (struct sockaddr *) &peer_addr, &addr_len);
-                    }
-                    if (newsockfd != -1) {
-                        /* reset our added id to a bad state */
-                        added_slot = -2;
+        if (xSemaphoreTake(fds_mutex, portMAX_DELAY) == pdTRUE) {
+            if (my_fds[n].inuse) {
+                fd = my_fds[n].fd;
+                fd_type = my_fds[n].fd_type;
+            }
+            xSemaphoreGive(fds_mutex);
+        }
 
-                        // Convert client address to string for ACL testing.
-                        std::string IP;
-                        hal_get_socket_client_ip(newsockfd, IP);
+        /* check read fd */
+        if (fd >= 0 && FD_ISSET(fd,read_fdset)) {
+            /*  if this is a listening socket then we accept on it and
+             * get a new client socket
+             */
+            if (fd_type == LISTEN_SOCKET) {
+                /* clear our state vars */
+                newsockfd = -1;
+                {
+                    socklen_t addr_len;
+                    struct sockaddr_storage peer_addr = {};
+                    addr_len = sizeof(peer_addr);
+                    newsockfd = accept(fd, (struct sockaddr *) &peer_addr, &addr_len);
+                }
+                if (newsockfd != -1) {
+                    /* reset our added id to a bad state */
+                    added_slot = -2;
 
-                        /* ACL test */
-                        if (!ser2sock_acl.find(IP)) {
-                            struct linger lo = { 1, 0 };
-                            setsockopt(newsockfd, SOL_SOCKET, SO_LINGER, &lo, sizeof(lo));
-                            close(newsockfd);
-                            ESP_LOGW(TAG, "Rejecting client connection from '%s'", IP.c_str());
+                    // Convert client address to string for ACL testing.
+                    std::string IP;
+                    hal_get_socket_client_ip(newsockfd, IP);
+
+                    /* ACL test */
+                    if (!ser2sock_acl.find(IP)) {
+                        struct linger lo = { 1, 0 };
+                        setsockopt(newsockfd, SOL_SOCKET, SO_LINGER, &lo, sizeof(lo));
+                        close(newsockfd);
+                        ESP_LOGW(TAG, "Rejecting client connection from '%s'", IP.c_str());
+                    } else {
+                        added_slot = _add_fd(newsockfd, CLIENT_SOCKET);
+                        if (added_slot >= 0) {
+#if defined(S2SD_DEBUG)
+                            ESP_LOGI(TAG, "Socket connected slot %i from %s", added_slot, IP.c_str());
+#endif
+                            did_work = true;
                         } else {
-                            added_slot = _add_fd(newsockfd, CLIENT_SOCKET);
-                            if (added_slot >= 0) {
 #if defined(S2SD_DEBUG)
-                                ESP_LOGI(TAG, "Socket connected slot %i from %s", added_slot, IP.c_str());
+                            ESP_LOGE(TAG,"add slot error %i", added_slot);
 #endif
-                                did_work = true;
-                            } else {
-#if defined(S2SD_DEBUG)
-                                ESP_LOGE(TAG,"add slot error %i", added_slot);
-#endif
-                                close(newsockfd);
-                                if(added_slot == -1) {
-                                    ESP_LOGW(TAG, "Socket refused. Max connections.");
-                                }
+                            close(newsockfd);
+                            if(added_slot == -1) {
+                                ESP_LOGW(TAG, "Socket refused. Max connections.");
                             }
                         }
-#if defined(S2SD_DEBUG)
-                    } else {
-                        ESP_LOGW(TAG,"accept errno: %i '%s' %i", errno, strerror(errno), listen_sock);
-#endif
                     }
+#if defined(S2SD_DEBUG)
                 } else {
-                    errno = 0;
-                    {
-                        received = recv(my_fds[n].fd, (void *)buffer, sizeof(buffer), 0);
-                    }
-                    if (received == 0) {
+                    ESP_LOGW(TAG,"accept errno: %i '%s' %i", errno, strerror(errno), fd);
+#endif
+                }
+            } else if (fd_type == CLIENT_SOCKET) {
+                errno = 0;
+                {
+                    received = recv(fd, (void *)buffer, sizeof(buffer), 0);
+                }
+                if (received == 0) {
 #if defined(S2SD_DEBUG)
-                        ESP_LOGI(TAG, "Closing socket fd slot %i errno: %i '%s'", n,
+                    ESP_LOGI(TAG, "Closing socket fd slot %i errno: %i '%s'", n,
+                             errno, strerror(errno));
+#endif
+                    _cleanup_fd(n);
+                } else {
+                    if (received < 0) {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                            continue;
+                        }
+#if defined(S2SD_DEBUG)
+                        ESP_LOGI(TAG,
+                                 "Closing socket errno: %i '%s'",
                                  errno, strerror(errno));
 #endif
                         _cleanup_fd(n);
                     } else {
-                        if (received < 0) {
-                            if (errno == EAGAIN || errno == EINTR) {
-                                continue;
-                            }
+                        did_work = true;
+                        // FIXME: Need to keep it clean and not call back into main()
 #if defined(S2SD_DEBUG)
-                            ESP_LOGI(TAG,
-                                     "Closing socket errno: %i '%s'",
-                                     errno, strerror(errno));
+                        ESP_LOGI(TAG,"fd(%i) slot(%i) sending %i bytes to the AD2*", fd, n, received);
 #endif
-                            _cleanup_fd(n);
-                        } else {
-                            did_work = true;
-                            // FIXME: Need to keep it clean and not call back into main()
-#if defined(S2SD_DEBUG)
-                            ESP_LOGI(TAG,"fd(%i) slot(%i) sending %i bytes to the AD2*", my_fds[n].fd, n, received);
-#endif
-                            // FIXME: overide to send raw pointer and not buffer.
-                            std::string tmp(buffer, received);
-                            ad2_send(tmp);
-                        }
+                        // FIXME: overide to send raw pointer and not buffer.
+                        std::string tmp(buffer, received);
+                        ad2_send(tmp);
                     }
                 }
-            } /* end FD_ISSET() */
-        }
+            }
+        } /* end FD_ISSET() */
     }
 
     return did_work;
@@ -639,37 +767,47 @@ static bool _poll_read_fdset(fd_set *read_fdset)
  */
 static bool _poll_write_fdset(fd_set *write_fdset)
 {
-    int n;
-    fifo_buffer* tempbuffer;
     bool did_work = false;
 
     /* check every socket to find the one that needs write */
-    for (n = 0; n < MAXCONNECTIONS; n++) {
-        if (my_fds[n].inuse == true && FD_ISSET(my_fds[n].fd,write_fdset)) {
-            /* see if we have data to write */
-            if (!_fifo_empty(&my_fds[n].send_buffer)) {
-                /* set our var to an invalid state */
-                tempbuffer = NULL;
+    for (int n = 0; n < MAXCONNECTIONS; n++) {
+        bool close_client = false;
+        int send_errno = 0;
 
-                /* handle writing to CLIENT_SOCKET */
-                if (my_fds[n].fd_type == CLIENT_SOCKET) {
-                    /* load our buffer with data to send */
-                    {
-                        tempbuffer = (fifo_buffer *) _fifo_get(
-                                         &my_fds[n].send_buffer);
-                        send(my_fds[n].fd, tempbuffer->buffer, tempbuffer->size, 0);
-                    }
+        if (fds_mutex == NULL || xSemaphoreTake(fds_mutex, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
 
-                    /* did we do any work? */
-                    if ( tempbuffer ) {
-                        did_work = true;
+        if (my_fds[n].inuse && my_fds[n].fd_type == CLIENT_SOCKET &&
+                FD_ISSET(my_fds[n].fd, write_fdset)) {
+            fifo_buffer *tempbuffer = (fifo_buffer *)_fifo_peek(
+                                          &my_fds[n].send_buffer);
+            if (tempbuffer) {
+                size_t remaining = tempbuffer->size - tempbuffer->offset;
+                ssize_t written = send(my_fds[n].fd,
+                                       tempbuffer->buffer + tempbuffer->offset,
+                                       remaining, 0);
+                if (written > 0) {
+                    tempbuffer->offset += (size_t)written;
+                    did_work = true;
+                    if (tempbuffer->offset == tempbuffer->size) {
+                        free(_fifo_get(&my_fds[n].send_buffer));
                     }
-                }
-                /* free up memory */
-                if(tempbuffer) {
-                    free(tempbuffer);
+                } else if (written == 0) {
+                    close_client = true;
+                    send_errno = ECONNRESET;
+                } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                    close_client = true;
+                    send_errno = errno;
                 }
             }
+        }
+        xSemaphoreGive(fds_mutex);
+
+        if (close_client) {
+            ESP_LOGW(TAG, "Closing socket fd slot %d after send error: %d '%s'",
+                     n, send_errno, strerror(send_errno));
+            _cleanup_fd(n);
         }
     }
 
@@ -699,7 +837,7 @@ void ser2sockd_server_task(void *pvParameters)
 #if defined(S2SD_DEBUG)
     ESP_LOGI(TAG, "%s waiting for network layer to start.", TAG);
 #endif
-    while (1) {
+    while (!ser2sockd_shutting_down) {
         if (!hal_get_netif_started()) {
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         } else {
@@ -712,7 +850,7 @@ void ser2sockd_server_task(void *pvParameters)
 #if defined(S2SD_DEBUG)
     ESP_LOGI(TAG, "%s waiting for network IP layer to start.", TAG);
 #endif
-    for (;;) {
+    for (; !ser2sockd_shutting_down;) {
         if (hal_get_network_connected()) {
 #if defined(S2SD_DEBUG)
             ESP_LOGI(TAG, "Network IP layer is OK. %s daemon service starting.", TAG);
@@ -736,10 +874,6 @@ void ser2sockd_server_task(void *pvParameters)
                 return;
             }
 
-            setsockopt(listen_sock, SOL_SOCKET, SO_SNDTIMEO,
-                       (char *) &socket_timeout, sizeof(socket_timeout));
-            setsockopt(listen_sock, SOL_SOCKET, SO_RCVTIMEO,
-                       (char *) &socket_timeout, sizeof(socket_timeout));
             setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, (char *) &bOptionTrue,
                        sizeof(bOptionTrue));
 
@@ -759,19 +893,23 @@ void ser2sockd_server_task(void *pvParameters)
 #if defined(S2SD_DEBUG)
             ESP_LOGI(TAG, "ser2sock server socket bound, port %d", PORT);
 #endif
-            err = listen(listen_sock, 1);
+            err = listen(listen_sock, listen_backlog);
             if (err != 0) {
                 ESP_LOGE(TAG, "ser2sock server error occurred during listen: errno %d", errno);
                 goto CLEAN_UP;
             }
 
-            _set_non_blocking(listen_sock);
+            if (_add_fd(listen_sock, LISTEN_SOCKET) < 0) {
+                ESP_LOGE(TAG, "Unable to reserve a slot for the listening socket");
+                goto CLEAN_UP;
+            }
 
-            _add_fd(listen_sock, LISTEN_SOCKET);
-
-            while (1) {
+            while (!ser2sockd_shutting_down) {
                 /* reset our loop state var(s) for this iteration */
                 did_work = false;
+
+                /* honor overflow/allocation failures requested by producers */
+                _cleanup_requested_fds();
 
                 /* build our fd sets */
                 _build_fdsets(&read_fdset, &write_fdset, &except_fdset);
@@ -786,6 +924,9 @@ void ser2sockd_server_task(void *pvParameters)
                     ESP_LOGE(TAG, "An error occurred during select() errno: %i '%s'", errno, strerror(errno));
                     continue;
                 }
+
+                /* A producer may have requested cleanup while select ran. */
+                _cleanup_requested_fds();
                 /* poll our exception fdset */
                 _poll_exception_fdset(&except_fdset);
 
