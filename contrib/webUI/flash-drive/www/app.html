@@ -1,90 +1,108 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-	<title>App</title>
-	<meta charset="UTF-8">
-	<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
-	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-	<link rel="stylesheet" href="app.css">
-	<link href="https://fonts.googleapis.com/css?family=Roboto&display=swap" rel="stylesheet">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <title>AlarmDecoder</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="app.css">
 </head>
-
 <body>
-	<div id="app">
-		<section id="navigation">
-			<ul>
-				<li><a href="#">Dashboard</a></li>
-				<li><a href="#">Activity</a></li>
-				<li><a href="#">Apps</a></li>
-			</ul>
-		</section>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">AD</span>
+        <div><strong>AlarmDecoder</strong><small>Partition <span id="partitionLabel">0</span></small></div>
+      </div>
+      <div id="connectionBadge" class="connection offline"><span></span><b>Offline</b></div>
+    </header>
 
-		<div id="main">
-			<section id="status" class="unknown">
-				<div>
-					<span id="status_icon" class="icon house with_lock"></span>
-					<h2 id="status_text">&nbsp;Waiting for state</h2>
-				</div>
-			</section>
-			<div id="controls_and_zones">
-				<section id="controls">
-					<a nohref id="b1Href" class="control large" style="cursor:pointer;color:blue;text-decoration:underline">
-						<div>
-							<div id="b1_icon" class="icon house with_key"></div><br>
-							<h2 id="b1_text">&nbsp;...</h2>
-						</div>
-					</a>
-					<a nohref id="b2Href" class="control large" style="cursor:pointer;color:blue;text-decoration:underline">
-						<div>
-							<div id="b2_icon" class="icon house with_key"></div><br>
-							<h2 id="b2_text">&nbsp;...</h2>
-						</div>
-					</a>
-					<div class="control large has_children">
-						<a nohref id="panicHref" class="control small" style="cursor:pointer;color:blue;text-decoration:underline">
-							<div>
-								<div class="icon police"></div><br>
-								<span>PANIC</span>
-							</div>
-						</a>
-						<a nohref id="fireHref" class="control small" style="cursor:pointer;color:blue;text-decoration:underline">
-							<div>
-								<div class="icon fire"></div><br>
-								<span>FIRE</span>
-							</div>
-						</a>
-						<a nohref id="auxHref" class="control small" style="cursor:pointer;color:blue;text-decoration:underline">
-							<div>
-								<div class="icon aux"></div><br>
-								<span>AUX</span>
-							</div>
-						</a>
-						<a nohref id="refreshHref" class="control small" style="cursor:pointer;color:blue;text-decoration:underline">
-							<div>
-								<div class="icon refresh"></div><br>
-								<span>REFRESH</span>
-							</div>
-						</a>
-					</div>
-				</section>
-				<section id="zones">
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-					<div class="zone empty"></div>
-				</section>
-			</div>
-		</div>
-	</div>
-    <div style="overflow:scroll;height:30px" id="divStatus">Not connected...</div>
+    <nav class="tabs" aria-label="Main navigation">
+      <button class="tab active" data-view="dashboard">Dashboard</button>
+      <button class="tab" data-view="activity">Activity <span id="activityCount" class="count">0</span></button>
+      <button class="tab" data-view="keypad">Keypad</button>
+    </nav>
+
+    <main>
+      <section id="dashboardView" class="view active">
+        <article id="hero" class="hero unknown">
+          <div class="hero-copy">
+            <p class="eyebrow">System status</p>
+            <h1 id="statusText">Waiting for panel</h1>
+            <p id="alphaMessage" class="alpha">Connecting to AlarmDecoder…</p>
+          </div>
+          <div id="statusGlyph" class="status-glyph" aria-hidden="true">?</div>
+        </article>
+
+        <section id="indicators" class="indicators" aria-label="System indicators">
+          <div class="indicator" data-state="ac"><span>Power</span><b id="powerState">—</b></div>
+          <div class="indicator" data-state="battery"><span>Battery</span><b id="batteryState">—</b></div>
+          <div class="indicator" data-state="chime"><span>Chime</span><b id="chimeState">—</b></div>
+          <div class="indicator" data-state="bypass"><span>Bypass</span><b id="bypassState">—</b></div>
+          <div class="indicator" data-state="beeps"><span>Beeps</span><b id="beepsState">—</b></div>
+        </section>
+
+        <section class="panel controls-panel">
+          <div class="section-heading"><div><p class="eyebrow">Quick actions</p><h2>System controls</h2></div></div>
+          <div class="quick-actions">
+            <button class="action primary" data-command="AWAY"><span>↗</span>Arm away</button>
+            <button class="action primary" data-command="STAY"><span>⌂</span>Arm stay</button>
+            <button class="action" data-command="DISARM"><span>○</span>Disarm</button>
+            <button class="action" data-command="EXIT"><span>→</span>Exit now</button>
+            <button class="action" data-command="CHIME"><span>♪</span>Toggle chime</button>
+            <button class="action" id="refreshButton"><span>↻</span>Refresh</button>
+          </div>
+        </section>
+
+        <section class="panel zones-panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">Attention</p><h2>Active zones</h2></div>
+            <span id="zoneCount" class="pill">0 active</span>
+          </div>
+          <div id="zones" class="zones"><p class="empty-state">No active zone alerts.</p></div>
+        </section>
+
+        <section class="panel emergency-panel">
+          <div class="section-heading"><div><p class="eyebrow danger-text">Emergency</p><h2>Press three times to activate</h2></div></div>
+          <div class="emergency-actions">
+            <button class="emergency police" data-emergency="PANIC_ALARM">Police <small>3 taps</small></button>
+            <button class="emergency fire" data-emergency="FIRE_ALARM">Fire <small>3 taps</small></button>
+            <button class="emergency aux" data-emergency="AUX_ALARM">Auxiliary <small>3 taps</small></button>
+          </div>
+        </section>
+      </section>
+
+      <section id="activityView" class="view">
+        <section class="panel activity-panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">This boot session</p><h2>Recent activity</h2></div>
+            <button id="reloadHistory" class="text-button">Reload</button>
+          </div>
+          <p class="section-note">The device retains the latest 64 events until it restarts.</p>
+          <ol id="activityList" class="activity-list"><li class="empty-state">No activity recorded yet.</li></ol>
+        </section>
+      </section>
+
+      <section id="keypadView" class="view">
+        <section class="keypad-card">
+          <div class="keypad-display">
+            <div><p class="eyebrow">Virtual keypad</p><strong id="keypadPanelText">Ready</strong></div>
+            <output id="keypadEntry" aria-live="polite">&nbsp;</output>
+          </div>
+          <div class="key-grid" aria-label="Alarm keypad">
+            <button data-key="1"><b>1</b></button><button data-key="2"><b>2</b><small>ABC</small></button><button data-key="3"><b>3</b><small>DEF</small></button>
+            <button data-key="4"><b>4</b><small>GHI</small></button><button data-key="5"><b>5</b><small>JKL</small></button><button data-key="6"><b>6</b><small>MNO</small></button>
+            <button data-key="7"><b>7</b><small>PQRS</small></button><button data-key="8"><b>8</b><small>TUV</small></button><button data-key="9"><b>9</b><small>WXYZ</small></button>
+            <button data-key="*"><b>＊</b><small>Reset</small></button><button data-key="0"><b>0</b></button><button data-key="#"><b>#</b><small>Enter</small></button>
+          </div>
+          <p class="keypad-help">Keys are sent immediately to the selected partition. Number keys on a physical keyboard are supported.</p>
+        </section>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+  <script src="app.js"></script>
 </body>
-<script src="app.js"></script>
 </html>

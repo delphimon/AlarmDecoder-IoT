@@ -5,6 +5,7 @@
   * 3.1. [webUI build (webui) - esp32/esp32-poe-iso-webui](#webui-build-(webui)---esp32/esp32-poe-iso-webui)
   * 3.2. [SmartThings build (stsdk) - esp32/esp32-poe-iso-stsdk](#smartthings-build-(stsdk)---esp32/esp32-poe-iso-stsdk)
 * 4. [Configuring the AD2IoT device](#configuring-the-ad2iot-device)
+  * 4.1. [Network CLI access](#network-cli-access)
 * 5. [AD2Iot CLI - command line interface](#ad2iot-cli---command-line-interface)
   * 5.1. [Basic commands](#basic-commands)
   * 5.2. [Ser2sock server component](#ser2sock-server-component)
@@ -100,6 +101,20 @@ Configuration of the AD2IoT is done directly over the USB serial port using a co
   - To access /sdcard/ad2iot.ini and /spiffs/ad2iot.ini files over the network enable the [FTPD component](#ftp-daemon-component). With FileZilla edit the configuration upload and send a custom FTP command using the "Server" menu and the "Enter custom command.." sub menu. Enter ```REST``` to restart the ad2iot and force it to load the configuration.
   - Sample config file with internal documentation can be found here [data/ad2iot.ini](data/ad2iot.ini)
   - Be sure to set the ftpd acl to only allow trusted systems to manage the files on the uSD card.
+
+###  4.1. <a name='network-cli-access'></a>Network CLI access
+
+The same CLI commands available over USB can be executed through the authenticated TCP CLI. The server is compiled in by default but remains disabled until it has a password, an IP access-control list, and the enable flag configured. From the USB CLI, configure it and restart:
+
+```console
+netcli password use-a-long-unique-password
+netcli acl 192.168.1.0/24
+netcli port 2323
+netcli enable Y
+restart
+```
+
+After restart, connect with a TCP terminal such as `nc <device-ip> 2323`, Windows Telnet, or PuTTY in Raw mode, enter the password, and use the normal commands. Run `exit` or `quit` to close the connection. Only one network CLI session is served at a time. The protocol is plain TCP, so use it only on a trusted private network or through a VPN; the ACL does not encrypt the password or command traffic.
 
 ##  5. <a name='ad2iot-cli---command-line-interface'></a>AD2Iot CLI - command line interface
 - Configure the initial AD2IoT device settings.
@@ -237,7 +252,7 @@ Installed version(AD2IOT-1103) build flag (webui) available version(AD2IOT-1103)
 ```console
 Usage: upgradeusd
 
-    Preform an firmware upgrade reading firmware.bin from uSD disk
+    Perform a firmware upgrade by reading /sdcard/firmware.bin
 ```
 - versionusd
 ```console
@@ -247,7 +262,7 @@ Usage: versionusd
 ```
 ```console
 AD2IOT # versionusd
-Installed version(AD2IOT-1103) build flag (webui).
+Installed version(AD2IOT-1104) build flag (webui).
 ```
 - netmode
 ```console
@@ -516,7 +531,7 @@ acl = 192.168.0.0/16, 10.10.0.0/16
 ```
 
 ###  5.3. <a name='web-user-interface-webui-component'></a>Web User Interface webUI component
-This component provides a simple HTML5+WebSocket user interface with realtime alarm status using push messages over WebSocket. Buttons for Arming, Disarming, Exiting, and sending panic events. Panic buttons require pressing the button three times in 5 seconds to help prevent false alarms.<br>
+This component provides a responsive HTML5+WebSocket dashboard with real-time alarm and keypad display state, system health indicators, active-zone details, quick controls, a 64-event activity history for the current boot session, and a full virtual keypad. It also exposes read-only JSON state and history endpoints under `/api`. Panic buttons require pressing the button three times within 3 seconds to help prevent false alarms.<br>
 <img src="contrib/webUI/EXAMPLE-PANEL-READY.jpg" width="200">
 
 ####  5.3.1. <a name='configuration-for-webui-server'></a>Configuration tool for webUI server

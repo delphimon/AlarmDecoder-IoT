@@ -50,16 +50,14 @@ static const char *TAG = "WEBUI";
 #define WEBUI_CONFIG_SECTION  "webui"
 
 #define WEBUI_DEFAULT_ACL "0.0.0.0/0"
+#define WEBUI_HISTORY_SIZE 64
+#define WEBUI_WS_MAX_PAYLOAD 256
 
 /* Max length a file path can have on storage */
 #define FILE_PATH_MAX (255)
 
 /* helper macro MIN */
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
-
-/* helper macro to test for extenions */
-#define IS_FILE_EXT(filename, ext) \
-    (strcasecmp(&filename[strlen(filename) - sizeof(ext) + 1], ext) == 0)
 
 // Global handle to httpd server
 httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
@@ -90,6 +88,25 @@ struct ws_session_storage {
     int codeID;
 };
 
+/**
+ * A bounded, reboot-scoped activity log.  Fixed-size fields keep memory use
+ * predictable on the ESP32 and avoid retaining panel protocol messages.
+ */
+struct webui_history_entry {
+    uint64_t sequence;
+    uint64_t uptime_ms;
+    int partition;
+    int zone;
+    char event[24];
+    char alpha[64];
+};
+
+static webui_history_entry webui_history[WEBUI_HISTORY_SIZE];
+static size_t webui_history_head = 0;
+static size_t webui_history_count = 0;
+static uint64_t webui_history_sequence = 0;
+static SemaphoreHandle_t webui_history_mutex = nullptr;
+
 // C++
 
 // Include template engine from
@@ -97,6 +114,85 @@ struct ws_session_storage {
 // Currently not functional with esp-idf development platform only Arduino so some mods were needed.
 #include "TinyTemplateEngine.h"
 #include "TinyTemplateEngineFileReader.h"
+
+static bool has_file_extension(const char *filename, const char *extension)
+{
+    size_t filename_len = strlen(filename);
+    size_t extension_len = strlen(extension);
+    return filename_len >= extension_len &&
+           strcasecmp(filename + filename_len - extension_len, extension) == 0;
+}
+
+static cJSON *webui_state_json(AD2PartitionState *s, const char *event)
+{
+    cJSON *root = ad2_get_partition_state_json(s);
+    cJSON_AddStringToObject(root, "event", event);
+    cJSON_AddNumberToObject(root, "uptime_ms", (double)(hal_uptime_us() / 1000));
+    if (s) {
+        cJSON_AddNumberToObject(root, "partition", s->partition);
+        cJSON_AddNumberToObject(root, "zone", s->zone);
+    }
+    cJSON_AddItemToObject(root, "zone_alerts", ad2_get_partition_zone_alerts_json(s));
+    return root;
+}
+
+static void webui_add_history(AD2PartitionState *s, int event_id)
+{
+    if (!s || !webui_history_mutex) {
+        return;
+    }
+
+    if (xSemaphoreTake(webui_history_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        webui_history_entry &entry = webui_history[webui_history_head];
+        entry.sequence = ++webui_history_sequence;
+        entry.uptime_ms = hal_uptime_us() / 1000;
+        entry.partition = s->partition;
+        entry.zone = s->zone;
+        strlcpy(entry.event, AD2Parse.event_str[event_id].c_str(), sizeof(entry.event));
+        strlcpy(entry.alpha, s->last_alpha_message.c_str(), sizeof(entry.alpha));
+
+        webui_history_head = (webui_history_head + 1) % WEBUI_HISTORY_SIZE;
+        if (webui_history_count < WEBUI_HISTORY_SIZE) {
+            webui_history_count++;
+        }
+        xSemaphoreGive(webui_history_mutex);
+    }
+}
+
+static cJSON *webui_history_json(size_t limit, int partition)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *items = cJSON_CreateArray();
+    cJSON_AddStringToObject(root, "event", "HISTORY");
+    cJSON_AddNumberToObject(root, "uptime_ms", (double)(hal_uptime_us() / 1000));
+    cJSON_AddItemToObject(root, "items", items);
+
+    if (!webui_history_mutex ||
+            xSemaphoreTake(webui_history_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return root;
+    }
+
+    size_t wanted = MIN(limit, (size_t)WEBUI_HISTORY_SIZE);
+    size_t added = 0;
+    for (size_t offset = 0; offset < webui_history_count && added < wanted; offset++) {
+        size_t index = (webui_history_head + WEBUI_HISTORY_SIZE - 1 - offset) % WEBUI_HISTORY_SIZE;
+        const webui_history_entry &entry = webui_history[index];
+        if (partition >= 0 && entry.partition != partition) {
+            continue;
+        }
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddNumberToObject(item, "sequence", (double)entry.sequence);
+        cJSON_AddNumberToObject(item, "uptime_ms", (double)entry.uptime_ms);
+        cJSON_AddNumberToObject(item, "partition", entry.partition);
+        cJSON_AddNumberToObject(item, "zone", entry.zone);
+        cJSON_AddStringToObject(item, "event", entry.event);
+        cJSON_AddStringToObject(item, "alpha", entry.alpha);
+        cJSON_AddItemToArray(items, item);
+        added++;
+    }
+    xSemaphoreGive(webui_history_mutex);
+    return root;
+}
 
 /**
  * generate uptime string
@@ -133,23 +229,23 @@ void uptimeString(std::string &tstring)
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filename)
 {
     /* Limited set of types hard coded here */
-    if (IS_FILE_EXT(filename, ".html")) {
+    if (has_file_extension(filename, ".html")) {
         return httpd_resp_set_type(req, "text/html");
-    } else if (IS_FILE_EXT(filename, ".css")) {
+    } else if (has_file_extension(filename, ".css")) {
         return httpd_resp_set_type(req, "text/css");
-    } else if (IS_FILE_EXT(filename, ".js")) {
+    } else if (has_file_extension(filename, ".js")) {
         return httpd_resp_set_type(req, "application/javascript");
-    } else if (IS_FILE_EXT(filename, ".json")) {
+    } else if (has_file_extension(filename, ".json")) {
         return httpd_resp_set_type(req, "application/json");
-    } else if (IS_FILE_EXT(filename, ".jpeg")) {
+    } else if (has_file_extension(filename, ".jpeg") || has_file_extension(filename, ".jpg")) {
         return httpd_resp_set_type(req, "image/jpeg");
-    } else if (IS_FILE_EXT(filename, ".png")) {
+    } else if (has_file_extension(filename, ".png")) {
         return httpd_resp_set_type(req, "image/png");
-    } else if (IS_FILE_EXT(filename, ".svg")) {
+    } else if (has_file_extension(filename, ".svg")) {
         return httpd_resp_set_type(req, "image/svg+xml");
-    } else if (IS_FILE_EXT(filename, ".gz")) {
+    } else if (has_file_extension(filename, ".gz")) {
         return httpd_resp_set_type(req, "application/x-gzip");
-    } else if (IS_FILE_EXT(filename, ".ico")) {
+    } else if (has_file_extension(filename, ".ico")) {
         return httpd_resp_set_type(req, "image/x-icon");
     }
     /* For any other type always set as plain text */
@@ -228,25 +324,37 @@ static void ws_alarmstate_async_send(void *arg)
                 // get the partition state based upon the partition ID on the AD2IoT firmware.
                 AD2PartitionState *s = ad2_get_partition_state(sess->partID);
                 if (s) {
-                    // build the standard json AD2IoT device and alarm state object.
-                    cJSON *root = ad2_get_partition_state_json(s);
-                    cJSON *zone_alerts = ad2_get_partition_zone_alerts_json(s);
-                    cJSON_AddStringToObject(root, "event", "SYNC");
-                    cJSON_AddItemToObject(root, "zone_alerts", zone_alerts);
-                    char *sys_info = cJSON_Print(root);
-                    cJSON_Minify(sys_info);
-                    httpd_ws_frame_t ws_pkt;
-                    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-                    ws_pkt.payload = (uint8_t*)sys_info;
-                    ws_pkt.len = strlen(sys_info);
-                    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-                    httpd_ws_send_frame_async(server, wsfd, &ws_pkt);
-                    cJSON_free(sys_info);
+                    cJSON *root = webui_state_json(s, "SYNC");
+                    char *sys_info = cJSON_PrintUnformatted(root);
+                    if (sys_info) {
+                        httpd_ws_frame_t ws_pkt;
+                        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+                        ws_pkt.payload = (uint8_t*)sys_info;
+                        ws_pkt.len = strlen(sys_info);
+                        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+                        httpd_ws_send_frame_async(server, wsfd, &ws_pkt);
+                        cJSON_free(sys_info);
+                    }
                     cJSON_Delete(root);
                 }
             }
         }
     }
+}
+
+static esp_err_t webui_ws_send_text(httpd_req_t *req, const std::string &text)
+{
+    httpd_ws_frame_t response;
+    memset(&response, 0, sizeof(response));
+    response.type = HTTPD_WS_TYPE_TEXT;
+    response.payload = (uint8_t *)text.c_str();
+    response.len = text.length();
+    return httpd_ws_send_frame(req, &response);
+}
+
+static esp_err_t webui_ws_error(httpd_req_t *req, const char *message)
+{
+    return webui_ws_send_text(req, std::string("!ERROR:") + message);
 }
 
 /**
@@ -259,83 +367,191 @@ static void ws_alarmstate_async_send(void *arg)
  */
 esp_err_t ad2ws_handler(httpd_req_t *req)
 {
-    uint8_t rx_buf[128] = { 0 };
+    if (req->method == HTTP_GET) {
+        return ESP_OK;
+    }
+
     httpd_ws_frame_t ws_pkt;
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-    ws_pkt.payload = rx_buf;
-    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 128);
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "httpd_ws_recv_frame failed with %d", ret);
         return ret;
     }
 
+    if (ws_pkt.len == 0 || ws_pkt.len > WEBUI_WS_MAX_PAYLOAD) {
+        return webui_ws_error(req, "Invalid frame length");
+    }
+
+    uint8_t rx_buf[WEBUI_WS_MAX_PAYLOAD + 1] = { 0 };
+    ws_pkt.payload = rx_buf;
+    ret = httpd_ws_recv_frame(req, &ws_pkt, WEBUI_WS_MAX_PAYLOAD);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "httpd_ws_recv_frame payload failed with %d", ret);
+        return ret;
+    }
+    rx_buf[ws_pkt.len] = '\0';
+
     if (ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
+        std::string message((char *)rx_buf, ws_pkt.len);
 
         // Register and return current state.
         std::string key_sync = "!SYNC:";
-        if(strncmp((char*)ws_pkt.payload, key_sync.c_str(), key_sync.length()) == 0) {
+        if(message.rfind(key_sync, 0) == 0) {
+            std::string args = message.substr(key_sync.length());
+            std::vector<std::string> args_v;
+            ad2_tokenize(args, ",", args_v);
+            if (args_v.size() != 2) {
+                return webui_ws_error(req, "SYNC requires partition and code slots");
+            }
+            char *end = nullptr;
+            long partID = strtol(args_v[0].c_str(), &end, 10);
+            if (*end != '\0' || partID < 0 || partID > AD2_MAX_PARTITION) {
+                return webui_ws_error(req, "Invalid partition slot");
+            }
+            long codeID = strtol(args_v[1].c_str(), &end, 10);
+            if (*end != '\0' || codeID < 0 || codeID > AD2_MAX_CODE) {
+                return webui_ws_error(req, "Invalid code slot");
+            }
+
             /* Create session's context if not already available */
             if (!req->sess_ctx) {
                 req->sess_ctx = malloc(sizeof(ws_session_storage));  /*!< Pointer to context data */
                 req->free_ctx = free_ws_session_storage;             /*!< Function to free context data */
+                if (!req->sess_ctx) {
+                    return webui_ws_error(req, "Unable to allocate session");
+                }
             }
-            std::string args((char *)&ws_pkt.payload[key_sync.length()]);
-            std::vector<std::string> args_v;
-            ad2_tokenize(args, ", ", args_v);
-            int codeID = atoi(args_v[1].c_str());
-            int partID = atoi(args_v[0].c_str());
-            ((ws_session_storage *)req->sess_ctx)->codeID = codeID;
-            ((ws_session_storage *)req->sess_ctx)->partID = partID;
+            ((ws_session_storage *)req->sess_ctx)->codeID = (int)codeID;
+            ((ws_session_storage *)req->sess_ctx)->partID = (int)partID;
 
             // trigger an async send using httpd_queue_work
             return httpd_queue_work(req->handle, ws_alarmstate_async_send, (void *)httpd_req_to_sockfd(req));
         }
 
         std::string key_ping = "!PING:";
-        if(strncmp((char*)ws_pkt.payload, key_ping.c_str(), key_ping.length()) == 0) {
+        if(message.rfind(key_ping, 0) == 0) {
             // send back a !PONG reply
-            std::string pong = "!PONG:00000000";
-            ws_pkt.payload = (uint8_t *)pong.c_str();
-            ws_pkt.len = pong.length();
-            ret = httpd_ws_send_frame(req, &ws_pkt);
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "httpd_ws_send_frame failed with %d", ret);
+            return webui_ws_send_text(req, "!PONG:00000000");
+        }
+
+        std::string key_history = "!HISTORY:";
+        if (message.rfind(key_history, 0) == 0) {
+            long limit = strtol(message.substr(key_history.length()).c_str(), nullptr, 10);
+            if (limit < 1 || limit > WEBUI_HISTORY_SIZE) {
+                limit = WEBUI_HISTORY_SIZE;
             }
+            cJSON *root = webui_history_json((size_t)limit, -1);
+            char *history = cJSON_PrintUnformatted(root);
+            std::string response = history ? history : "{\"event\":\"HISTORY\",\"items\":[]}";
+            cJSON_free(history);
+            cJSON_Delete(root);
+            return webui_ws_send_text(req, response);
         }
 
         std::string key_send = "!SEND:";
-        if(strncmp((char*)ws_pkt.payload, key_send.c_str(), key_send.length()) == 0) {
-            std::string sendbuf = (char *)&ws_pkt.payload[key_send.length()];
+        if(message.rfind(key_send, 0) == 0) {
+            if (!req->sess_ctx) {
+                return webui_ws_error(req, "SYNC is required before commands");
+            }
+            std::string sendbuf = message.substr(key_send.length());
             int codeID = ((ws_session_storage *)req->sess_ctx)->codeID;
             int partID = ((ws_session_storage *)req->sess_ctx)->partID;
 
-            if (sendbuf.rfind("<DISARM>", 0) == 0) {
+            if (sendbuf == "<DISARM>") {
                 ad2_disarm(codeID, partID);
-            } else if (sendbuf.rfind("<STAY>", 0) == 0) {
+            } else if (sendbuf == "<STAY>") {
                 ad2_arm_stay(codeID, partID);
-            } else if (sendbuf.rfind("<AWAY>", 0) == 0) {
+            } else if (sendbuf == "<AWAY>") {
                 ad2_arm_away(codeID, partID);
-            } else if (sendbuf.rfind("<EXIT>", 0) == 0) {
+            } else if (sendbuf == "<EXIT>") {
                 ad2_exit_now(partID);
-            } else if (sendbuf.rfind("<AUX_ALARM>", 0) == 0) {
+            } else if (sendbuf == "<CHIME>") {
+                ad2_chime_toggle(codeID, partID);
+            } else if (sendbuf == "<AUX_ALARM>") {
                 ad2_aux_alarm(partID);
-            } else if (sendbuf.rfind("<PANIC_ALARM>", 0) == 0) {
+            } else if (sendbuf == "<PANIC_ALARM>") {
                 ad2_panic_alarm(partID);
-            } else if (sendbuf.rfind("<FIRE_ALARM>", 0) == 0) {
+            } else if (sendbuf == "<FIRE_ALARM>") {
                 ad2_fire_alarm(partID);
             } else if (sendbuf.rfind("<BYPASS>", 0) == 0) {
-                // <BYPASS>XX
-                std::string zone = sendbuf.substr(8, string::npos);
-                ad2_bypass_zone(codeID, partID, std::atoi(zone.c_str()));
+                std::string zone_text = sendbuf.substr(8);
+                char *end = nullptr;
+                long zone = strtol(zone_text.c_str(), &end, 10);
+                if (*end != '\0' || zone < 1 || zone > AD2_MAX_ZONES) {
+                    return webui_ws_error(req, "Invalid bypass zone");
+                }
+                ad2_bypass_zone(codeID, partID, (uint8_t)zone);
+            } else if (sendbuf.rfind("<KEYS>", 0) == 0) {
+                if (!ad2_keypad_send(sendbuf.substr(6), partID)) {
+                    return webui_ws_error(req, "Invalid keypad input or partition");
+                }
             } else {
                 ESP_LOGW(TAG, "Unknown websocket command '%s'", sendbuf.c_str());
+                return webui_ws_error(req, "Unknown command");
             }
+            return ESP_OK;
         }
+
+        return webui_ws_error(req, "Unknown request");
     }
-    return ret;
+    return webui_ws_error(req, "Text frames only");
 }
 #endif
+
+static int webui_query_int(httpd_req_t *req, const char *name, int default_value)
+{
+    size_t query_len = httpd_req_get_url_query_len(req);
+    if (!query_len || query_len > 128) {
+        return default_value;
+    }
+    char query[129] = { 0 };
+    char value[16] = { 0 };
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+            httpd_query_key_value(query, name, value, sizeof(value)) != ESP_OK) {
+        return default_value;
+    }
+    char *end = nullptr;
+    long parsed = strtol(value, &end, 10);
+    return (*end == '\0') ? (int)parsed : default_value;
+}
+
+static esp_err_t webui_send_json_response(httpd_req_t *req, cJSON *root)
+{
+    char *json = cJSON_PrintUnformatted(root);
+    if (!json) {
+        cJSON_Delete(root);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Unable to encode JSON");
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t result = httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(json);
+    cJSON_Delete(root);
+    return result;
+}
+
+/** Read-only current state API: GET /api/state?partition=0 */
+static esp_err_t webui_state_handler(httpd_req_t *req)
+{
+    int partID = webui_query_int(req, "partition", 0);
+    if (partID < 0 || partID > AD2_MAX_PARTITION) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid partition slot");
+    }
+    AD2PartitionState *s = ad2_get_partition_state(partID);
+    return webui_send_json_response(req, webui_state_json(s, "SYNC"));
+}
+
+/** Reboot-scoped activity API: GET /api/history?limit=64&partition=1 */
+static esp_err_t webui_history_handler(httpd_req_t *req)
+{
+    int limit = webui_query_int(req, "limit", WEBUI_HISTORY_SIZE);
+    int partition = webui_query_int(req, "partition", -1);
+    if (limit < 1 || limit > WEBUI_HISTORY_SIZE) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Limit must be between 1 and 64");
+    }
+    return webui_send_json_response(req, webui_history_json((size_t)limit, partition));
+}
 
 /**
  * @brief HTTP GET handler for downloading files from uSD card.
@@ -365,6 +581,14 @@ esp_err_t file_get_handler(httpd_req_t *req)
         return ESP_FAIL; // close socket
     }
 
+    // Never allow the filesystem to resolve a request outside WEBUI_DOC_ROOT.
+    // Backslashes are rejected as well so the same rule remains safe if the
+    // storage implementation changes.
+    if (strstr(filename, "..") || strchr(filename, '\\')) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
+        return ESP_FAIL;
+    }
+
     // copy string into something more flexible.
     std::string filepath(temppath);
 
@@ -372,6 +596,7 @@ esp_err_t file_get_handler(httpd_req_t *req)
     if (filepath.back() == '/') {
         filepath += "index.html";
     }
+    const std::string content_type_path = filepath;
 
     // Special case check for pre compressed files.
     std::string gzfile = filepath + ".gz";
@@ -402,13 +627,13 @@ esp_err_t file_get_handler(httpd_req_t *req)
     }
 
     // set the content type based upon the extension.
-    set_content_type_from_file(req, filepath.c_str());
+    set_content_type_from_file(req, content_type_path.c_str());
 
     // inform the client we prefer they disconnect when the page is delivered.
     httpd_resp_set_hdr(req, "Connection", "close");
 
     // Open the file and spool it to the client.
-    FILE *f = fopen(filepath.c_str(), "r");
+    FILE *f = fopen(filepath.c_str(), "rb");
     if (f == NULL) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
         return ESP_FAIL; // close socket
@@ -517,6 +742,7 @@ esp_err_t file_get_handler(httpd_req_t *req)
  */
 void webui_on_state_change(std::string *msg, AD2PartitionState *s, void *arg)
 {
+    webui_add_history(s, (int)arg);
 #if CONFIG_HTTPD_WS_SUPPORT
 #if defined(DEBUG_WEBUI)
     ESP_LOGI(TAG, "webui_on_state_change partition(%i) event(%s) message('%s')", s->partition, AD2Parse.event_str[(int)arg].c_str(), msg->c_str());
@@ -532,19 +758,17 @@ void webui_on_state_change(std::string *msg, AD2PartitionState *s, void *arg)
                     // get the partition state based upon the partition requested.
                     AD2PartitionState *temps = ad2_get_partition_state(sess->partID);
                     if (temps && s->partition == temps->partition) {
-                        cJSON *root = ad2_get_partition_state_json(s);
-                        cJSON *zone_alerts = ad2_get_partition_zone_alerts_json(s);
-                        cJSON_AddStringToObject(root, "event", AD2Parse.event_str[(int)arg].c_str());
-                        cJSON_AddItemToObject(root, "zone_alerts", zone_alerts);
-                        char *sys_info = cJSON_Print(root);
-                        cJSON_Minify(sys_info);
-                        httpd_ws_frame_t ws_pkt;
-                        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-                        ws_pkt.payload = (uint8_t*)sys_info;
-                        ws_pkt.len = strlen(sys_info);
-                        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-                        httpd_ws_send_frame_async(server, client_fds[i], &ws_pkt);
-                        cJSON_free(sys_info);
+                        cJSON *root = webui_state_json(s, AD2Parse.event_str[(int)arg].c_str());
+                        char *sys_info = cJSON_PrintUnformatted(root);
+                        if (sys_info) {
+                            httpd_ws_frame_t ws_pkt;
+                            memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+                            ws_pkt.payload = (uint8_t*)sys_info;
+                            ws_pkt.len = strlen(sys_info);
+                            ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+                            httpd_ws_send_frame_async(server, client_fds[i], &ws_pkt);
+                            cJSON_free(sys_info);
+                        }
                         cJSON_Delete(root);
                     }
                 }
@@ -598,6 +822,7 @@ void webui_server_task(void *pvParameters)
     // Configure the web server and handlers.
     server_config.uri_match_fn = httpd_uri_match_wildcard;
     server_config.open_fn = http_acl_test;
+    server_config.lru_purge_enable = true;
 #if CONFIG_HTTPD_WS_SUPPORT
     httpd_uri_t ad2ws_server = {
         .uri       = "/ad2ws",
@@ -609,6 +834,28 @@ void webui_server_task(void *pvParameters)
         .supported_subprotocol = nullptr
     };
 #endif
+    httpd_uri_t state_api = {
+        .uri       = "/api/state",
+        .method    = HTTP_GET,
+        .handler   = webui_state_handler,
+        .user_ctx  = NULL,
+#if CONFIG_HTTPD_WS_SUPPORT
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr
+#endif
+    };
+    httpd_uri_t history_api = {
+        .uri       = "/api/history",
+        .method    = HTTP_GET,
+        .handler   = webui_history_handler,
+        .user_ctx  = NULL,
+#if CONFIG_HTTPD_WS_SUPPORT
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr
+#endif
+    };
     httpd_uri_t file_server = {
         .uri       = "/*",
         .method    = HTTP_GET,
@@ -630,6 +877,8 @@ void webui_server_task(void *pvParameters)
 #if CONFIG_HTTPD_WS_SUPPORT
                 httpd_register_uri_handler(server, &ad2ws_server);
 #endif
+                httpd_register_uri_handler(server, &state_api);
+                httpd_register_uri_handler(server, &history_api);
                 httpd_register_uri_handler(server, &file_server);
             } else {
                 // error long 10s sleep.
@@ -778,6 +1027,12 @@ void webui_init(void)
         return;
     }
 
+    webui_history_mutex = xSemaphoreCreateMutex();
+    if (!webui_history_mutex) {
+        ESP_LOGE(TAG, "Unable to allocate activity history mutex");
+        return;
+    }
+
     // load and parse ACL if set or set default to allow all.
     std::string acl = WEBUI_DEFAULT_ACL;
 
@@ -801,7 +1056,11 @@ void webui_init(void)
     AD2Parse.subscribeTo(ON_ALARM_CHANGE, webui_on_state_change, (void *)ON_ALARM_CHANGE);
     AD2Parse.subscribeTo(ON_ZONE_BYPASSED_CHANGE, webui_on_state_change, (void *)ON_ZONE_BYPASSED_CHANGE);
     AD2Parse.subscribeTo(ON_EXIT_CHANGE, webui_on_state_change, (void *)ON_EXIT_CHANGE);
-    // SUbscribe to ON_ZONE_CHANGE events
+    AD2Parse.subscribeTo(ON_PROGRAMMING_CHANGE, webui_on_state_change, (void *)ON_PROGRAMMING_CHANGE);
+    AD2Parse.subscribeTo(ON_ALPHA_MESSAGE, webui_on_state_change, (void *)ON_ALPHA_MESSAGE);
+    AD2Parse.subscribeTo(ON_PANIC, webui_on_state_change, (void *)ON_PANIC);
+    AD2Parse.subscribeTo(ON_LRR, webui_on_state_change, (void *)ON_LRR);
+    // Subscribe to ON_ZONE_CHANGE events
     AD2Parse.subscribeTo(ON_ZONE_CHANGE, webui_on_state_change, (void *)ON_ZONE_CHANGE);
 
     ad2_printf_host(true, "%s: Init done, daemon starting.", TAG);

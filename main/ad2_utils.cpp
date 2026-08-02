@@ -1430,6 +1430,51 @@ void ad2_bypass_zone(int codeId, int partId, uint8_t zone)
 }
 
 /**
+ * @brief Send literal virtual-keypad keys to a configured partition.
+ *
+ * @details Accepts the keys present on a conventional alarm keypad.  The
+ * caller is responsible for limiting the size of a sequence; this function
+ * rejects anything other than digits, '*' and '#' so an untrusted client
+ * cannot inject AlarmDecoder protocol commands.
+ *
+ * @param [in]keys Key sequence to send.
+ * @param [in]partId Configured partition slot.
+ *
+ * @return true when the sequence was accepted and sent.
+ */
+bool ad2_keypad_send(const std::string &keys, int partId)
+{
+    if (keys.empty() || keys.length() > 32 ||
+            keys.find_first_not_of("0123456789*#") != std::string::npos) {
+        return false;
+    }
+
+    int address = -1;
+    std::string section = std::string(AD2PART_CONFIG_SECTION " ") + std::to_string(partId);
+    ad2_get_config_key_int(section.c_str(), PART_CONFIG_ADDRESS, &address);
+
+    AD2PartitionState *s = AD2Parse.getAD2PState(address, false);
+    if (!s) {
+        ESP_LOGE(TAG, "No partition state found for address %i. Waiting for messages from the AD2?", address);
+        return false;
+    }
+
+    std::string msg;
+    if (s->panel_type == ADEMCO_PANEL) {
+        msg = ad2_string_printf("K%02i%s", address, keys.c_str());
+    } else if (s->panel_type == DSC_PANEL) {
+        msg = ad2_string_printf("K%01i1%s", address, keys.c_str());
+    } else {
+        ESP_LOGW(TAG, "Unable to send keypad input: unknown panel type");
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Sending %u virtual keypad key(s)", (unsigned)keys.length());
+    ad2_send(msg);
+    return true;
+}
+
+/**
  * @brief Send string to the AD2 devices after macro translation.
  *
  * @param [in]buf Pointer to string to send to AD2 devices.
@@ -1554,7 +1599,7 @@ void ad2_printf_host(bool prefix, const char *fmt, ...)
     if (prefix) {
         if (!line_clear) {
             // move to the next line.
-            uart_write_bytes(UART_NUM_0, "\r\n", 2);
+            cli_write_bytes("\r\n", 2);
         }
         line_clear = false;
         // write prefix
@@ -1562,14 +1607,14 @@ void ad2_printf_host(bool prefix, const char *fmt, ...)
         pfx += "N (";
         pfx += std::to_string(esp_log_timestamp());
         pfx += ") ";
-        uart_write_bytes(UART_NUM_0, pfx.c_str(), pfx.length());
+        cli_write_bytes(pfx.c_str(), pfx.length());
     }
 
     va_list args;
     va_start(args, fmt);
     std::string out = ad2_string_vaprintf(fmt, args);
     va_end(args);
-    uart_write_bytes(UART_NUM_0, out.c_str(), out.length());
+    cli_write_bytes(out.c_str(), out.length());
     // release the console
     ad2_give_host_console((void *)xTaskGetCurrentTaskHandle());
 }
@@ -1592,7 +1637,7 @@ void ad2_snprintf_host(const char *fmt, size_t size, ...)
     va_start(args, size);
     std::string out = ad2_string_vasnprintf(fmt, size, args);
     va_end(args);
-    uart_write_bytes(UART_NUM_0, out.c_str(), out.length());
+    cli_write_bytes(out.c_str(), out.length());
     // release the console
     ad2_give_host_console((void *)xTaskGetCurrentTaskHandle());
 }
@@ -1727,7 +1772,7 @@ cJSON *ad2_get_partition_zone_alerts_json(AD2PartitionState *s)
                 cJSON_AddNumberToObject(zone, "mask", s->address_mask_filter);
                 cJSON_AddStringToObject(zone, "state", _state_string.c_str());
                 std::string zalpha;
-                AD2Parse.getZoneString((int)s->zone, zalpha);
+                AD2Parse.getZoneString((int)e.first, zalpha);
                 cJSON_AddStringToObject(zone, "name", zalpha.c_str());
                 cJSON_AddItemToArray(_zone_alerts, zone);
             }

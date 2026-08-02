@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1104` for the web dashboard, full keypad, activity history, API, network CLI, and safer uSD update work.
+- [x] WEBUI: add a responsive live dashboard, full keypad, reboot-scoped activity history, read-only state/history API, protocol validation, and safer static-file handling.
+- [x] USDUPDATE: validate image size and OTA results, retain failed images for diagnosis, and only select/restart into a successfully validated application image.
+- [x] CORE: Add an opt-in, password-protected and ACL-restricted TCP transport for the CLI.
 - [ ] CORE: TODO: Add astyle testing in new github action worflow.
 - [ ] STSDK: TODO: Successful adopting test.
 

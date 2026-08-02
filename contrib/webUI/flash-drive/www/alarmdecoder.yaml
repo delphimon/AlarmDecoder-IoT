@@ -1,168 +1,119 @@
-openapi: 3.0.0
+openapi: 3.0.3
 info:
-  title: AlarmDecoder Embedded API(AD2EMB)
-  description: Learn more about the <b>AlarmDecoder AD2EMB</b> project on the <a href="https://github.com/nutechsoftware/ArduinoAlarmDecoder">github project page</a>.
-  version: "1.2.0-oas3"
-  contact:
-    email: alarmdecoder@support.nutech.com
-    name: AlarmDecoder
-    url: https://www.alarmdecoder.com/
+  title: AlarmDecoder IoT Web API
+  description: Read-only current-state and reboot-scoped activity endpoints. Access is restricted by the webUI IP/CIDR ACL.
+  version: "1.0"
   license:
     name: Apache 2.0
-    url: http://www.apache.org/licenses/LICENSE-2.0.html
-tags:
-  - name: event notification
-    description: Manage subscriptions to event push notifications.
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
 servers:
-  - url: /api/alarmdecoder
-    description: Base AD2EMB REST API path http://alarmdecoder.local/api/alarmdecoder
+  - url: /
 paths:
-  /events:
-    post:
-      description: Subscribe to event push notifications.
-      security:
-        - apiKeyHeader: []
-        - apiKeyQuery: []
-      tags:
-        - event notification
+  /api/state:
+    get:
+      summary: Get current partition state
+      parameters:
+        - in: query
+          name: partition
+          description: Configured AD2IoT partition slot.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 8
+            default: 0
       responses:
-        '200':
-          description: Success.
+        "200":
+          description: Current state, or an object with an Unknown display message if no state has been received.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NoContent'
-        '401':
-          description: Not authorized.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AlarmStatusError'
-    delete:
-      description: Unsubscribe from event push notifications.
-      security:
-        - apiKeyHeader: []
-        - apiKeyQuery: []
-      tags:
-        - event notification
+                $ref: "#/components/schemas/PartitionState"
+        "400":
+          description: Invalid partition slot.
+  /api/history:
+    get:
+      summary: Get recent activity from this boot session
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 64
+            default: 64
+        - in: query
+          name: partition
+          description: Optional panel partition number filter.
+          schema:
+            type: integer
       responses:
-        '200':
-          description: OK
-          content:
-            text/plain:
-              schema:
-                type: string
-                example: OK
-        '401':
-          description: Not authorized.
+        "200":
+          description: Newest-first activity.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AlarmStatusError'
+                $ref: "#/components/schemas/HistoryResponse"
+        "400":
+          description: Invalid limit.
 components:
-  securitySchemes:
-    apiKeyHeader:
-      description: API Key passed via Authorization Header.
-      type: apiKey
-      in: header
-      name: Authorization
-    apiKeyQuery:
-      description: API Key passed via query string.
-      type: apiKey
-      in: query
-      name: apikey
   schemas:
-    AlarmStatus:
+    ZoneAlert:
+      type: object
       properties:
-        type:
-          type: string
-        power:
-          type: boolean
-        ready:
-          type: boolean
-        alarming:
-          type: boolean
-        bypassed:
-          type: boolean
-        armed_away:
-          type: boolean
-        armed_home:
-          type: boolean
-        alarm_fire:
-          type: boolean
-        battery:
-          type: boolean
-        alarm_panic:
-          type: boolean
-        chime:
-          type: boolean
-        perimeter_only:
-          type: boolean
-        entry_delay_off:
-          type: boolean
-        exit_now:
-          type: boolean
-        relays:
+        zone: { type: integer }
+        partition: { type: integer }
+        mask: { type: integer }
+        state: { type: string }
+        name: { type: string }
+    PartitionState:
+      type: object
+      properties:
+        event: { type: string, example: SYNC }
+        uptime_ms: { type: number, format: double }
+        partition: { type: integer }
+        zone: { type: integer }
+        ready: { type: boolean }
+        armed_away: { type: boolean }
+        armed_stay: { type: boolean }
+        backlight_on: { type: boolean }
+        programming: { type: boolean }
+        zone_bypassed: { type: boolean }
+        ac_power: { type: boolean }
+        chime_on: { type: boolean }
+        alarm_event_occurred: { type: boolean }
+        alarm_sounding: { type: boolean }
+        battery_low: { type: boolean }
+        entry_delay_off: { type: boolean }
+        fire_alarm: { type: boolean }
+        system_issue: { type: boolean }
+        perimeter_only: { type: boolean }
+        exit_now: { type: boolean }
+        system_specific: { type: integer }
+        beeps: { type: integer }
+        panel_type: { type: string }
+        last_alpha_message: { type: string }
+        last_numeric_messages: { type: string }
+        mask: { type: integer }
+        zone_alerts:
           type: array
           items:
-            type: object
-            properties:
-              address:
-                type: integer
-              channel:
-                type: integer
-              value:
-                type: integer
-        faults:
+            $ref: "#/components/schemas/ZoneAlert"
+    HistoryEntry:
+      type: object
+      properties:
+        sequence: { type: number, format: double }
+        uptime_ms: { type: number, format: double }
+        partition: { type: integer }
+        zone: { type: integer }
+        event: { type: string }
+        alpha: { type: string }
+    HistoryResponse:
+      type: object
+      properties:
+        event: { type: string, example: HISTORY }
+        uptime_ms: { type: number, format: double }
+        items:
           type: array
+          maxItems: 64
           items:
-            type: object
-            properties:
-              zone:
-                type: integer
-              state:
-                type: integer
-      example:
-        type: Ademco
-        power: true
-        ready: false
-        alarming: false
-        armed: false
-        bypassed: false
-        armed_away: false
-        armed_home: false
-        alarm_fire: false
-        battery: false
-        alarm_panic: false
-        chime: false
-        perimeter_only: false
-        entry_delay_off: false
-        exit_now: false
-        relays:
-          - address: 18
-            channel: 1
-            value: 80
-        faults:
-          - '1': 1
-          - '2': 1
-    AlarmStatusError:
-      properties:
-        error:
-          type: object
-          properties:
-            code:
-              type: integer
-            message:
-              type: string
-      example:
-        error:
-          code: 401
-          message: An Error has occurred!
-    AlarmDecoderSend:
-      properties:
-        keys:
-          type: string
-      example:
-        keys: '41121'
-    NoContent:
-      properties: {}
+            $ref: "#/components/schemas/HistoryEntry"

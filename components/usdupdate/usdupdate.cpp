@@ -55,35 +55,132 @@ TaskHandle_t usdupdate_task_handle = NULL;
  */
 static void usd_task_func(void * command)
 {
-    ad2_printf_host(false, "Starting uSD update");
+    free(command);
+    ad2_printf_host(false, "Starting uSD update from '" CONFIG_FIRMWARE_PATH "'.\r\n");
 
     FILE *f = fopen(CONFIG_FIRMWARE_PATH, "rb");
     if (f == NULL) {
-        ad2_printf_host(false, "uSD update '" CONFIG_FIRMWARE_PATH "' not found, aborting.");
+        ad2_printf_host(false, "uSD update image not found; update aborted.\r\n");
+        usdupdate_task_handle = NULL;
         vTaskDelete(NULL);
+        return;
     }
 
     esp_ota_handle_t update_handle = 0;
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
-
-    // Start OTA
-    esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
-
-    char *buffer = (char *)malloc(4096);
-    while (true) {
-        size_t read = fread(buffer, 1, 4096, f);
-        if (read == 0) break;
-        esp_ota_write(update_handle, buffer, read);
+    if (update_partition == NULL) {
+        ad2_printf_host(false, "No OTA update partition is available; update aborted.\r\n");
+        fclose(f);
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
     }
 
-    // Finish and set boot partition
-    esp_ota_end(update_handle);
-    esp_ota_set_boot_partition(update_partition);
+    if (fseek(f, 0, SEEK_END) != 0) {
+        ad2_printf_host(false, "Unable to read update image size; update aborted.\r\n");
+        fclose(f);
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    long image_size = ftell(f);
+    rewind(f);
+    if (image_size <= 0 || (size_t)image_size > update_partition->size) {
+        ad2_printf_host(false,
+                        "Invalid update image size (%ld bytes, slot capacity %u); update aborted.\r\n",
+                        image_size, (unsigned)update_partition->size);
+        fclose(f);
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // Start OTA
+    esp_err_t result = esp_ota_begin(update_partition, (size_t)image_size, &update_handle);
+    if (result != ESP_OK) {
+        ad2_printf_host(false, "Unable to start OTA update: %s. Image retained.\r\n", esp_err_to_name(result));
+        fclose(f);
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    char *buffer = (char *)malloc(4096);
+    if (buffer == NULL) {
+        ad2_printf_host(false, "Unable to allocate update buffer; image retained.\r\n");
+        esp_ota_abort(update_handle);
+        fclose(f);
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    size_t total_written = 0;
+    bool write_ok = true;
+    while (true) {
+        size_t read = fread(buffer, 1, 4096, f);
+        if (read == 0) {
+            if (ferror(f)) {
+                ad2_printf_host(false, "Error reading update image; image retained.\r\n");
+                write_ok = false;
+            }
+            break;
+        }
+        result = esp_ota_write(update_handle, buffer, read);
+        if (result != ESP_OK) {
+            ad2_printf_host(false, "Error writing OTA partition: %s. Image retained.\r\n", esp_err_to_name(result));
+            write_ok = false;
+            break;
+        }
+        total_written += read;
+    }
 
     free(buffer);
     fclose(f);
-    remove(CONFIG_FIRMWARE_PATH);
+
+    if (!write_ok || total_written != (size_t)image_size) {
+        esp_ota_abort(update_handle);
+        ad2_printf_host(false, "Incomplete OTA write (%u of %ld bytes); update aborted.\r\n",
+                        (unsigned)total_written, image_size);
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // esp_ota_end validates the complete ESP application image before it can
+    // be selected as the next boot partition.
+    result = esp_ota_end(update_handle);
+    if (result != ESP_OK) {
+        ad2_printf_host(false, "Update image validation failed: %s. Image retained.\r\n", esp_err_to_name(result));
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    esp_app_desc_t app_desc;
+    result = esp_ota_get_partition_description(update_partition, &app_desc);
+    if (result != ESP_OK) {
+        ad2_printf_host(false, "Unable to read installed image metadata: %s. Image retained.\r\n", esp_err_to_name(result));
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    result = esp_ota_set_boot_partition(update_partition);
+    if (result != ESP_OK) {
+        ad2_printf_host(false, "Unable to select the updated boot partition: %s. Image retained.\r\n", esp_err_to_name(result));
+        usdupdate_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (remove(CONFIG_FIRMWARE_PATH) != 0) {
+        ESP_LOGW(TAG, "Update installed but unable to remove '%s'", CONFIG_FIRMWARE_PATH);
+    }
+    ad2_printf_host(false, "Installed %s (%ld bytes) in OTA slot '%s'.\r\n",
+                    app_desc.version, image_size, update_partition->label);
     ad2_printf_host(true, "%s Prepare to restart system!", TAG);
+    usdupdate_task_handle = NULL;
     hal_restart();
 }
 
@@ -96,7 +193,14 @@ void usd_do_update(const char *command)
         ESP_LOGW(TAG, "Device is currently updating.");
         return;
     }
-    xTaskCreate(&usd_task_func, "AD2 uSD Update", 1024*8, strdup(command), tskIDLE_PRIORITY+2, &usdupdate_task_handle);
+    char *task_command = strdup(command ? command : "");
+    if (task_command == NULL ||
+            xTaskCreate(&usd_task_func, "AD2 uSD Update", 1024*8, task_command,
+                        tskIDLE_PRIORITY+2, &usdupdate_task_handle) != pdPASS) {
+        free(task_command);
+        usdupdate_task_handle = NULL;
+        ESP_LOGE(TAG, "Unable to start uSD update task.");
+    }
 }
 
 /**

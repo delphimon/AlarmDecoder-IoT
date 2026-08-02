@@ -1,32 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="ie=edge">
-    <link rel="Shortcut Icon" href="/favicon.ico" type="image/x-icon">
-    <script src="//unpkg.com/swagger-ui-dist@3/swagger-ui-standalone-preset.js"></script>
-    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/3.22.1/swagger-ui-standalone-preset.js"></script> -->
-    <script src="//unpkg.com/swagger-ui-dist@3/swagger-ui-bundle.js"></script>
-    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/3.22.1/swagger-ui-bundle.js"></script> -->
-    <link rel="stylesheet" href="//unpkg.com/swagger-ui-dist@3/swagger-ui.css" />
-    <!-- <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/3.22.1/swagger-ui.css" /> -->
-    <title>Swagger</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AlarmDecoder Web API</title>
+  <style>
+    body{max-width:760px;margin:0 auto;padding:40px 20px;background:#080d18;color:#f5f7fb;font:15px/1.6 system-ui}h1{font-size:32px}h2{margin-top:32px}code{padding:3px 7px;border-radius:6px;background:#182338;color:#8ed9ff}article{margin:12px 0;padding:18px;border:1px solid #26344d;border-radius:14px;background:#111a2b}a{color:#5cc8ff}.muted{color:#93a1b8}
+  </style>
 </head>
 <body>
-    <div id="swagger-ui"></div>
-    <script>
-        window.onload = function() {
-          SwaggerUIBundle({
-            url: "/alarmdecoder.yaml",
-            dom_id: '#swagger-ui',
-            presets: [
-              SwaggerUIBundle.presets.apis,
-              SwaggerUIStandalonePreset
-            ],
-            layout: "StandaloneLayout"
-          })
-        }
-    </script>
+  <p><a href="/app.html">← Dashboard</a></p>
+  <h1>AlarmDecoder Web API</h1>
+  <p class="muted">Read-only JSON endpoints. The webUI IP/CIDR ACL applies to every request.</p>
+  <article><strong>Current state</strong><p><code>GET /api/state?partition=0</code></p><span class="muted">Returns a live partition snapshot and active zone alerts.</span></article>
+  <article><strong>Activity history</strong><p><code>GET /api/history?limit=64&amp;partition=1</code></p><span class="muted">Returns newest-first events retained during the current boot session. The partition filter is optional.</span></article>
+  <h2>Machine-readable definition</h2>
+  <p>Download the <a href="/alarmdecoder.yaml">OpenAPI 3.0 definition</a>.</p>
 </body>
 </html>

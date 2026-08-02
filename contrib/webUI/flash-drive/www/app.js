@@ -1,435 +1,336 @@
-var panel_states =  {
-  "unknown":{
-    "status_class": "not_ready",
-    "icon_class": "icon house with_key",
-    "label":"No partition state found. partID not found on AD2IoT check partition config settings.",
-    "b1_label": "Unknown",
-    "b2_label": "Unknown"
-  },
-  "armed_away":{
-    "status_class":"armed",
-    "icon_class":"icon house with_key",
-    "label":"Armed (away)",
-    "b1_icon_class": "icon house with_lock",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_walker",
-    "b2_label": "DISARM"
-  },
-  "armed_away_exit":{
-    "status_class":"armed",
-    "icon_class":"icon house with_walker",
-    "label":"Armed (away&nbsp;exit&nbsp;now)",
-    "b1_icon_class": "icon house with_lock",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_lock",
-    "b2_label": "DISARM"
-  },
-  "armed_stay":{
-    "status_class":"armed",
-    "icon_class":"icon house with_key",
-    "label":"Armed (stay)",
-    "b1_icon_class": "icon house with_lock",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_walker",
-    "b2_label": "EXIT"
-  },
-  "armed_stay_exit":{
-    "status_class":"armed",
-    "icon_class":"icon house with_walker",
-    "label":"Armed (stay&nbsp;exit&nbsp;now)",
-    "b1_icon_class": "icon house with_lock",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_lock",
-    "b2_label": "DISARM"
-  },
-  "armed_night":{
-    "status_class":"armed",
-    "icon_class":"icon house with_key",
-    "label":"Armed (night)",
-    "b1_icon_class": "icon house with_lock",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_walker",
-    "b2_label": "EXIT"
-  },
-  "armed_night_exit":{
-    "status_class":"armed",
-    "icon_class":"icon house with_walker",
-    "label":"Armed (exit&nbsp;now)",
-    "b1_icon_class": "icon house with_lock",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_walker",
-    "b2_label": "EXIT"
-  },
-  "alarming":{
-    "status_class":"alarming",
-    "icon_class":"icon house with_key",
-    "label":"Alarming!",
-    "b1_icon_class": "icon house with_lock",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_lock",
-    "b2_label": "DISARM"
-  },
-  "fire":{
-    "status_class":"alarming",
-    "icon_class":"icon house with_key",
-    "label":"Fire Alarm",
-    "b1_icon_class": "icon house with_lock",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_lock",
-    "b2_label": "DISARM"
-  },
-  "ready":{
-    "status_class":"ready",
-    "icon_class":"icon house with_lock",
-    "label":"Ready",
-    "b1_icon_class": "icon house with_key",
-    "b1_label": "AWAY",
-    "b2_icon_class": "icon house with_key",
-    "b2_label": "STAY"
-  },
-  "notready":{
-    "status_class":"not_ready",
-    "icon_class":"icon house with_lock",
-    "label":"Not Ready",
-    "b1_icon_class": "icon house with_key",
-    "b1_label": "DISARM",
-    "b2_icon_class": "icon house with_key",
-    "b2_label": "DISARM"
-  }
-}
-panel_states.get = function(key) {
-  return (panel_states[key] ? panel_states[key] : panel_states["unknown"]);
-}
+(function () {
+  "use strict";
 
-var Debugger = function(klass) {
-  this.debug = {}
-  if (klass.isDebug) {
-    for (var m in console)
-      if (typeof console[m] == "function")
-        this.debug[m] = console[m].bind(window.console, klass.toString()+": ");
-  }else{
-    for (var m in console)
-      if (typeof console[m] == "function")
-        this.debug[m] = function(){}
-  }
-  return this.debug;
-}
+  const byId = id => document.getElementById(id);
+  const query = new URLSearchParams(window.location.search);
+  const clampSlot = (name, maximum) => {
+    const value = Number.parseInt(query.get(name) || "0", 10);
+    return Number.isInteger(value) && value >= 0 && value <= maximum ? value : 0;
+  };
 
-const elem = id => document.getElementById(id);
+  const partID = clampSlot("partID", 8);
+  const codeID = clampSlot("codeID", 128);
+  const wsHost = query.get("wsHost");
+  byId("partitionLabel").textContent = String(partID);
 
-class AD2ws {
-  constructor(partID, codeID, wsHost) {
-      this.isDebug = true;
-      this.debug = Debugger(this);
-      this.partID = partID;
-      this.codeID = codeID;
-      this.wsHost = wsHost;
-      this.connecting = false;
-      this.connected = false;
-      this.ws = null;
-      this.ad2emb_state = null;
-      this.mode = "unknown";
+  const app = {
+    socket: null,
+    connected: false,
+    reconnectDelay: 1000,
+    reconnectTimer: null,
+    state: null,
+    history: [],
+    serverUptime: 0,
+    keypadMask: "",
+    keypadClearTimer: null,
+    toastTimer: null
+  };
+
+  const modeFor = state => {
+    if (!state || state.last_alpha_message === "Unknown") return "unknown";
+    if (state.alarm_sounding || state.fire_alarm) return "alarm";
+    if (state.armed_away) return "armed-away";
+    if (state.armed_stay) return "armed-stay";
+    if (state.ready) return "ready";
+    return "not-ready";
+  };
+
+  const modeDetails = mode => ({
+    "alarm": { hero: "alarm", label: "Alarm active", glyph: "!" },
+    "armed-away": { hero: "armed", label: "Armed away", glyph: "↗" },
+    "armed-stay": { hero: "armed", label: "Armed stay", glyph: "⌂" },
+    "ready": { hero: "ready", label: "Ready to arm", glyph: "✓" },
+    "not-ready": { hero: "not-ready", label: "Not ready", glyph: "·" },
+    "unknown": { hero: "unknown", label: "Waiting for panel", glyph: "?" }
+  }[mode]);
+
+  function setConnection(status) {
+    const badge = byId("connectionBadge");
+    badge.className = "connection " + status;
+    badge.querySelector("b").textContent = status === "online" ? "Live" : status === "connecting" ? "Connecting" : "Offline";
   }
 
-  /* init UI */
-  initUI() {
-
-    const divStatus = elem("divStatus");
-
-    // alarm button click handler.
-    function alarmClick(obj, clicks, command) {
-      switch(clicks) {
-        case 1:
-          obj.classList.add("tap_1"); obj.classList.remove("tap_2");
-          break;
-        case 2:
-          obj.classList.remove("tap_1"); obj.classList.add("tap_2");
-          break;
-        case 3:
-          ad2ws.sendCommand(command);
-        default:
-          auxHrefClicks = 0;
-          obj.classList.remove("tap_1"); obj.classList.remove("tap_2");
-      }
-    }
-
-    /**
-     * bind onclick events to the UI buttons
-     */
-    elem("b1Href").onclick = function() {
-      ad2ws.sendCommand(elem("b1_text").innerHTML);
-    };
-
-    elem("b2Href").onclick = function() {
-      ad2ws.sendCommand(elem("b2_text").innerHTML);
-    };
-
-    var panicHrefClicks = 0;
-    var panicHrefTimer;
-    elem("panicHref").onclick = function() {
-      var obj = this;
-      panicHrefClicks++;
-      alarmClick(this, panicHrefClicks, "PANIC_ALARM");
-      clearTimeout(panicHrefTimer);
-      panicHrefTimer = setTimeout(function(){ panicHrefClicks=0; alarmClick(obj, panicHrefClicks, '');}, 3000);
-    };
-
-    var fireHrefClicks = 0;
-    var fireHrefTimer;
-    elem("fireHref").onclick = function() {
-      var obj = this;
-      fireHrefClicks++;
-      alarmClick(this, fireHrefClicks, "FIRE_ALARM");
-      clearTimeout(fireHrefTimer);
-      fireHrefTimer = setTimeout(function(){ fireHrefClicks=0; alarmClick(obj, fireHrefClicks, "");}, 3000);
-    };
-
-    var auxHrefClicks = 0;
-    var auxHrefTimer;
-    elem("auxHref").onclick = function() {
-      var obj = this;
-      auxHrefClicks++;
-      alarmClick(this, auxHrefClicks, "AUX_ALARM");
-      clearTimeout(auxHrefTimer);
-      auxHrefTimer = setTimeout(function(){ auxHrefClicks=0; alarmClick(obj, auxHrefClicks, "");}, 3000);
-    };
-
-    elem("refreshHref").onclick = function() {
-      ad2ws.wsSendSync();
-    };
+  function showToast(message, isError) {
+    const toast = byId("toast");
+    toast.textContent = message;
+    toast.className = "toast visible" + (isError ? " error" : "");
+    clearTimeout(app.toastTimer);
+    app.toastTimer = setTimeout(() => { toast.className = "toast"; }, 2800);
   }
 
-  /* update UI from current state */
-  updateUI() {
-    /* test if state is valid */
-    if (!this.ad2emb_state) {
-      this.mode = "unknown";
+  function setIndicator(id, text, tone) {
+    const value = byId(id);
+    value.textContent = text;
+    value.parentElement.className = "indicator" + (tone ? " " + tone : "");
+  }
+
+  function renderState(state) {
+    app.state = state;
+    app.serverUptime = Number(state.uptime_ms) || app.serverUptime;
+    const mode = modeFor(state);
+    const details = modeDetails(mode);
+    const hero = byId("hero");
+    hero.className = "hero " + details.hero;
+    byId("statusText").textContent = details.label;
+    byId("statusGlyph").textContent = details.glyph;
+    byId("alphaMessage").textContent = state.last_alpha_message || "No keypad display message received.";
+    byId("keypadPanelText").textContent = state.last_alpha_message || details.label;
+    document.title = details.label + " · AlarmDecoder";
+
+    setIndicator("powerState", state.ac_power ? "AC online" : "AC outage", state.ac_power ? "good" : "danger");
+    setIndicator("batteryState", state.battery_low ? "Low" : "Normal", state.battery_low ? "danger" : "good");
+    setIndicator("chimeState", state.chime_on ? "On" : "Off", state.chime_on ? "good" : "");
+    setIndicator("bypassState", state.zone_bypassed ? "Active" : "Clear", state.zone_bypassed ? "warn" : "good");
+    setIndicator("beepsState", state.beeps ? String(state.beeps) : "Quiet", state.beeps ? "warn" : "");
+    renderZones(Array.isArray(state.zone_alerts) ? state.zone_alerts : []);
+  }
+
+  function renderZones(zones) {
+    const container = byId("zones");
+    container.textContent = "";
+    byId("zoneCount").textContent = zones.length + (zones.length === 1 ? " active" : " active");
+    if (!zones.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty-state";
+      empty.textContent = "No active zone alerts.";
+      container.appendChild(empty);
       return;
     }
 
-    /* simple state machine for now to set status class */
-    if (this.ad2emb_state.alarm_sounding) {
-      this.mode = "alarming";
-    } else
-    if (this.ad2emb_state.fire_alarm) {
-      this.mode = "fire";
-    } else
-    if (this.ad2emb_state.ready) {
-      this.mode = "ready";
-    } else {
-      if (this.ad2emb_state.armed_away) {
-        /* Note: append _exit if exit_now state is set */
-        this.mode = "armed_away" + (this.ad2emb_state.exit_now ? "_exit" : "");
-      } else
-      if (this.ad2emb_state.armed_stay) {
-        /* Note: append _exit if exit_now state is set */
-        this.mode = "armed_stay" + (this.ad2emb_state.exit_now ? "_exit" : "");
-      } else {
-        if (this.ad2emb_state.last_alpha_message === "Unknown") {
-          this.mode = "unknown";
+    zones.forEach(zone => {
+      const card = document.createElement("article");
+      card.className = "zone";
+      const number = document.createElement("span");
+      number.className = "zone-number";
+      number.textContent = String(zone.zone);
+      const copy = document.createElement("div");
+      copy.className = "zone-copy";
+      const name = document.createElement("b");
+      name.textContent = zone.name || "Zone " + zone.zone;
+      const status = document.createElement("small");
+      status.textContent = zone.state || "open";
+      copy.append(name, status);
+      const bypass = document.createElement("button");
+      bypass.type = "button";
+      bypass.textContent = "Bypass";
+      bypass.addEventListener("click", () => sendCommand("BYPASS", String(zone.zone)));
+      card.append(number, copy, bypass);
+      container.appendChild(card);
+    });
+  }
+
+  function eventLabel(event) {
+    return ({
+      "ARMED": "System armed",
+      "DISARMED": "System disarmed",
+      "POWER": "Power state changed",
+      "READY": "Ready state changed",
+      "ALARM": "Alarm state changed",
+      "FIRE": "Fire state changed",
+      "ZONE": "Zone state changed",
+      "LOW BATTERY": "Battery state changed",
+      "CHIME": "Chime state changed",
+      "BEEPS": "Keypad beeps changed",
+      "PROG. MODE": "Programming state changed",
+      "ALPHA MSG.": "Keypad display updated",
+      "CONTACT ID": "Panel event received",
+      "PANIC": "Panic event received",
+      "EXIT": "Exit state changed"
+    }[event] || event || "Panel update");
+  }
+
+  function relativeTime(uptime) {
+    const seconds = Math.max(0, Math.floor((app.serverUptime - Number(uptime || 0)) / 1000));
+    if (seconds < 5) return "just now";
+    if (seconds < 60) return seconds + "s ago";
+    if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+    if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+    return Math.floor(seconds / 86400) + "d ago";
+  }
+
+  function renderHistory() {
+    const list = byId("activityList");
+    list.textContent = "";
+    byId("activityCount").textContent = String(app.history.length);
+    if (!app.history.length) {
+      const empty = document.createElement("li");
+      empty.className = "empty-state";
+      empty.textContent = "No activity recorded yet.";
+      list.appendChild(empty);
+      return;
+    }
+
+    app.history.slice(0, 64).forEach(entry => {
+      const item = document.createElement("li");
+      const alert = /ALARM|FIRE|PANIC|LOW BATTERY/.test(entry.event || "");
+      item.className = "activity-item" + (alert ? " alert" : "");
+      const dot = document.createElement("span");
+      dot.className = "activity-dot";
+      const body = document.createElement("div");
+      body.className = "activity-body";
+      const title = document.createElement("b");
+      title.textContent = eventLabel(entry.event);
+      const detail = document.createElement("p");
+      detail.textContent = entry.alpha || (entry.zone ? "Zone " + entry.zone : "State updated");
+      body.append(title, detail);
+      const meta = document.createElement("div");
+      meta.className = "activity-meta";
+      meta.textContent = relativeTime(entry.uptime_ms);
+      const partition = document.createElement("span");
+      partition.textContent = "Partition " + (entry.partition || partID);
+      meta.appendChild(partition);
+      item.append(dot, body, meta);
+      list.appendChild(item);
+    });
+  }
+
+  function rememberLiveEvent(state) {
+    if (!state.event || state.event === "SYNC") return;
+    app.history.unshift({
+      event: state.event,
+      uptime_ms: state.uptime_ms,
+      partition: state.partition,
+      zone: state.zone || 0,
+      alpha: state.last_alpha_message || ""
+    });
+    app.history = app.history.slice(0, 64);
+    renderHistory();
+  }
+
+  function wsURL() {
+    if (wsHost) {
+      if (/^wss?:\/\//i.test(wsHost)) return wsHost.replace(/\/$/, "") + "/ad2ws";
+      return "ws://" + wsHost.replace(/\/$/, "") + "/ad2ws";
+    }
+    return (window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + "/ad2ws";
+  }
+
+  function connect() {
+    clearTimeout(app.reconnectTimer);
+    if (app.socket && app.socket.readyState < WebSocket.CLOSING) return;
+    setConnection("connecting");
+    const socket = new WebSocket(wsURL());
+    app.socket = socket;
+
+    socket.addEventListener("open", () => {
+      app.connected = true;
+      app.reconnectDelay = 1000;
+      setConnection("online");
+      sendRaw("!SYNC:" + partID + "," + codeID);
+      sendRaw("!HISTORY:64");
+    });
+
+    socket.addEventListener("message", event => {
+      if (typeof event.data !== "string") return;
+      if (event.data.startsWith("!ERROR:")) {
+        showToast(event.data.slice(7), true);
+        return;
+      }
+      if (!event.data.startsWith("{")) return;
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.event === "HISTORY") {
+          app.serverUptime = Number(payload.uptime_ms) || app.serverUptime;
+          app.history = Array.isArray(payload.items) ? payload.items : [];
+          renderHistory();
         } else {
-          this.mode = "notready";
+          rememberLiveEvent(payload);
+          renderState(payload);
         }
+      } catch (error) {
+        showToast("The device returned invalid state data.", true);
       }
-    }
+    });
 
-    // Update panel attributes if the mode changed.
-    if (this.mode != this.last_mode) {
-      this.last_mode = this.mode;
+    socket.addEventListener("close", () => {
+      app.connected = false;
+      if (app.socket === socket) app.socket = null;
+      setConnection("offline");
+      app.reconnectTimer = setTimeout(connect, app.reconnectDelay);
+      app.reconnectDelay = Math.min(app.reconnectDelay * 2, 15000);
+    });
 
-      /* retrieve the panel state for this mode and apply to the UI main panel. */
-      debug.info("Setting the UI mode to '" + this.mode +"'");
-      var ps = panel_states.get(this.mode);
-      elem("status").className = ps.status_class;
-      elem("status_icon").className = ps.icon_class;
-      elem("status_text").innerHTML = ps.label;
-      elem("b1_icon").className = ps.b1_icon_class;
-      elem("b1_text").innerHTML = ps.b1_label;
-      elem("b2_icon").className = ps.b2_icon_class;
-      elem("b2_text").innerHTML = ps.b2_label;
-    }
-
-    // report any zones in zone_alerts[]
-    // Fill all avail zone boxes empty the rest.
-    var zones = elem("zones");
-    var children = zones.childNodes;
-    var _idx = 0;
-    for (var i=0; i<children.length; i++) {
-      var child = zones.childNodes[i];
-      if (child.nodeType == 1) {
-        if (this.ad2emb_state.zone_alerts[_idx]) {
-          child.innerHTML = "";
-          child.className = "zone";
-          var zoneNumber = this.ad2emb_state.zone_alerts[_idx].zone;
-          var aTag = document.createElement("a");
-          aTag.setAttribute('id',"bypassHref");
-          aTag.setAttribute('class',"control small");
-          aTag.setAttribute('style',"cursor:pointer;color:white;text-decoration:underline");
-          aTag.innerHTML = "<span>" + zoneNumber + "</span>";
-          child.appendChild(aTag);
-          aTag.onclick = function() {
-            ad2ws.sendCommand("BYPASS", zoneNumber);
-          };
-        } else {
-          child.className = "zone empty";
-          child.innerHTML = "";
-        }
-        _idx++;
-      }
-    }
-
+    socket.addEventListener("error", () => socket.close());
   }
 
-  /* FIXME: docs on simple ws request api */
-  /* connect WS to AD2 IoT device and stay connected. */
-  wsConnect() {
-      if (this.ws === null) {
-        var wshost = document.location.host;
-        if (wshost === "") {
-          wshost = this.wsHost;
-        }
-        var url = "ws://" + wshost + "/ad2ws";
-        this.debug.info("Connecting to ws url: "+url);
-        divStatus.innerHTML = "<p>Connecting.</p>";
-        this.connecting = true;
-        this.ws = new WebSocket(url);
-
-        /* On open send SYNC request for the partition id */
-        this.ws.onopen = e => {
-            this.debug.info("Web socket open");
-            this.connecting = false;
-            this.connected = true;
-            divStatus.innerHTML = "<p>Connected.</p>";
-            this.wsSendSync();
-        };
-        /* Parse web socket message from the AD2Iot device */
-        this.ws.onmessage = e => {
-            if (e.data[0] == "{") {
-              this.debug.info("Received AD2IoT alarm state: " + e.data);
-              this.ad2emb_state = JSON.parse(e.data);
-            }
-            if (e.data[0] == "!") {
-              if (e.data.startsWith("!PONG:")) {
-                this.debug.info("Received 'PONG' AD2IoT web socket is alive.");
-              } else {
-                this.debug.info("Received unknown message from AD2IoT web socket: " + e.data);
-              }
-            }
-            this.updateUI();
-        }
-        /* reconnect on lost connection. */
-        this.ws.onclose = e => {
-            this.debug.info("Web socket closed");
-            this.ws = null;
-            divStatus.innerHTML = "<p>Closed.</p>";
-            if (this.connecting) {
-              this.connecting = false;
-              this.debug.info("was connecting.");
-            }
-            if (this.connected) {
-                this.connected = false;
-                divStatus.innerHTML+="<p>Disconnected.</p>";
-            }
-            setTimeout(function() {
-              ad2ws.wsConnect();
-            }, 1000);
-        }
-        /* on errors */
-        this.ws.onerror = e => {
-            this.debug.error(e);
-            this.ws.close();
-        }
-      }
+  function sendRaw(message) {
+    if (!app.socket || app.socket.readyState !== WebSocket.OPEN) {
+      showToast("Panel connection is offline.", true);
+      return false;
+    }
+    app.socket.send(message);
+    return true;
   }
 
- /**
-  * Request the current AD2EMB AlarmDecoder state and inform the server
-  * of our address or partition to be connected to.
-  */
-  wsSendSync() {
-    this.debug.info("wsSendSync");
-    this.wsSendMessage("!SYNC:"+this.partID+","+this.codeID);
+  function sendCommand(command, argument) {
+    const ok = sendRaw("!SEND:<" + command + ">" + (argument || ""));
+    if (ok && command !== "KEYS") showToast(command.replace("_ALARM", "").replace("_", " ") + " sent");
+    return ok;
   }
 
-  /* check the ws connection */
-  wsCheck() {
-    this.debug.info("wsCheck");
-    if (this.ws !== null) {
-      if (this.ws.readyState === WebSocket.OPEN) {
-        this.debug.info("sending ping.");
-        this.wsSendMessage("!PING:00000000");
-      }
+  function sendKey(key, button) {
+    if (!/^[0-9*#]$/.test(key) || !sendCommand("KEYS", key)) return;
+    app.keypadMask = (app.keypadMask + "•").slice(-12);
+    byId("keypadEntry").textContent = app.keypadMask;
+    clearTimeout(app.keypadClearTimer);
+    app.keypadClearTimer = setTimeout(() => {
+      app.keypadMask = "";
+      byId("keypadEntry").innerHTML = "&nbsp;";
+    }, 3000);
+    if (button) {
+      button.classList.add("pressed");
+      setTimeout(() => button.classList.remove("pressed"), 120);
     }
   }
 
-  /* send message to AD2EMB IoT web socket. */
-  wsSendMessage(msg) {
-      if (this.ws !== null) {
-          this.ws.send(msg);
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item === tab));
+      document.querySelectorAll(".view").forEach(view => view.classList.remove("active"));
+      byId(tab.dataset.view + "View").classList.add("active");
+    });
+  });
+
+  document.querySelectorAll("[data-command]").forEach(button => {
+    button.addEventListener("click", () => sendCommand(button.dataset.command));
+  });
+  byId("refreshButton").addEventListener("click", () => sendRaw("!SYNC:" + partID + "," + codeID));
+  byId("reloadHistory").addEventListener("click", () => sendRaw("!HISTORY:64"));
+
+  document.querySelectorAll("[data-emergency]").forEach(button => {
+    let taps = 0;
+    let timer = null;
+    button.addEventListener("click", () => {
+      taps++;
+      clearTimeout(timer);
+      button.classList.toggle("tap-1", taps === 1);
+      button.classList.toggle("tap-2", taps === 2);
+      if (taps >= 3) {
+        sendCommand(button.dataset.emergency);
+        taps = 0;
+        button.classList.remove("tap-1", "tap-2");
       }
-  }
+      timer = setTimeout(() => {
+        taps = 0;
+        button.classList.remove("tap-1", "tap-2");
+      }, 3000);
+    });
+  });
 
-  /* process a command convert it into the correct syntax for ad2ws_handler() in the AD2IoT firmware webUI component.
-      ['<EXIT>', '<STAY>', '<AWAY>', '<DISARM>', '<CHIME>', '<BYPASS>'] */
-  sendCommand(cmd, arg = '') {
-    debug.info("sendCommand(" + cmd + ")");
-    /* if we have something send it. */
-    if (cmd.length) {
-      ad2ws.wsSendMessage("!SEND:<"+cmd+">"+arg);
-    }
+  document.querySelectorAll("[data-key]").forEach(button => {
+    button.addEventListener("click", () => sendKey(button.dataset.key, button));
+  });
+  document.addEventListener("keydown", event => {
+    if (!/^[0-9*#]$/.test(event.key)) return;
+    const keypadView = byId("keypadView");
+    if (!keypadView.classList.contains("active")) return;
+    event.preventDefault();
+    const button = document.querySelector('[data-key="' + event.key + '"]');
+    sendKey(event.key, button);
+  });
 
-  }
-};
-
-/* helper to get values from the query string on the url. */
-function getQueryStringParameterByName(name, url = window.location.href) {
-  name = name.replace(/[\[\]]/g, '\\$&');
-  var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
-      results = regex.exec(url);
-  if (!results) return null;
-  if (!results[2]) return '';
-  return decodeURIComponent(results[2].replace(/\+/g, ' '));
-}
-
-/**
- * Use commands 'partition' and 'code' to configure the virtual keypad and code slot.
- *  https://github.com/nutechsoftware/AlarmDecoder-IoT#base-commands
- */
-var partID = 0; var codeID = 0;
-var szvalue = null;
-if( (szvalue = getQueryStringParameterByName("partID")) === null ) {
-  console.info("No 'partID' value provided in URI using default value.");
-} else {
-  console.info("Loading 'partID' value from URI.");
-  partID = parseInt(szvalue);
-};
-if( (szvalue = getQueryStringParameterByName("codeID")) === null ) {
-  console.info("No 'codeID' id value provided in URI using default value.");
-} else {
-  console.info("Loading 'codeID' id value from URI.");
-  codeID = parseInt(szvalue);
-};
-
-/**
- * Allow for debugging by use a different host for the websocket than the source of this html.
- */
-var wsHost = null;
-if( (szvalue = getQueryStringParameterByName("wsHost")) === null ) {
-  console.info("No 'wsHost' value provided in URI using default source host.");
-} else {
-  console.info("Loading 'wsHost' value from URI.");
-  wsHost = szvalue;
-};
-
-console.info("Starting the AD2IoT Virtual Keypad using partition id: "+ partID + " and code id: " + codeID);
-/* Initialize the AD2ws class for the address */
-let ad2ws = new AD2ws(partID, codeID, wsHost);
-
-/* Initialize the UI */
-ad2ws.initUI();
-
-/* Start the web socket connection. */
-ad2ws.wsConnect();
-
-/* Create ping keep alive timer. */
-var loadingTimer = setInterval(function(){ad2ws.wsCheck();}, 15000);
+  setInterval(() => {
+    if (app.connected) sendRaw("!PING:00000000");
+  }, 15000);
+  connect();
+}());

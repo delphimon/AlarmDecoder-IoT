@@ -43,5 +43,16 @@ typedef struct cli_command_list {
 void cli_main();
 void cli_register_command(cli_cmd_t* cmd);
 void cli_task_notify();
+void cli_process_command(char* input_string);
+
+/**
+ * Route CLI I/O performed by the current task to a connected socket.
+ * Calls from all other tasks continue to use the USB UART.
+ */
+void cli_set_io_socket(int socket_fd);
+void cli_clear_io_socket();
+bool cli_is_socket_io();
+int cli_write_bytes(const char *buffer, size_t length);
+int cli_read_bytes(uint8_t *buffer, size_t length, TickType_t timeout);
 
 #endif /* _AD2_UART_CLI_H_ */

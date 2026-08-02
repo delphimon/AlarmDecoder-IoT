@@ -61,6 +61,11 @@ static const char *TAG = "AD2_IoT";
 #include "ser2sock.h"
 #endif
 
+// authenticated network CLI support
+#if CONFIG_AD2IOT_NETWORK_CLI
+#include "network_cli.h"
+#endif
+
 // twilio support
 #if CONFIG_AD2IOT_TWILIO_CLIENT
 #include "twilio.h"
@@ -647,7 +652,7 @@ static void _cli_cmd_top_event(const char *string)
             }
         }
         // Check if host sent any data exit command if true.
-        int len = uart_read_bytes(UART_NUM_0, rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
+        int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
         if (len == -1) {
             // An error happend. Sleep for a bit and try again?
             ESP_LOGE(TAG, "Error reading for UART aborting task.");
@@ -1104,6 +1109,11 @@ extern "C" {
         ser2sockd_register_cmds();
 #endif
 
+#if CONFIG_AD2IOT_NETWORK_CLI
+        // Register network CLI configuration commands.
+        network_cli_register_cmds();
+#endif
+
 #if CONFIG_AD2IOT_TWILIO_CLIENT
         // Register TWILIO CLI commands.
         twilio_register_cmds();
@@ -1289,6 +1299,11 @@ extern "C" {
         // init ser2sock server
         ser2sockd_init();
         AD2Parse.subscribeTo(SER2SOCKD_ON_RAW_RX_DATA, nullptr);
+#endif
+
+#if CONFIG_AD2IOT_NETWORK_CLI
+        // Start the authenticated TCP command-line server.
+        network_cli_init();
 #endif
 
 #if CONFIG_STDK_IOT_CORE

@@ -47,6 +47,7 @@ void ad2_aux_alarm(int partId);
 void ad2_exit_now(int partId);
 void ad2_bypass_zone(std::string &code, int partId, uint8_t zone);
 void ad2_bypass_zone(int codeId, int partId, uint8_t zone);
+bool ad2_keypad_send(const std::string &keys, int partId);
 void ad2_send(std::string &buf);
 AD2PartitionState *ad2_get_partition_state(int partId);
 cJSON *ad2_get_ad2iot_device_info_json();

@@ -1,0 +1,9 @@
+menu "AD2iot * Network CLI"
+    config AD2IOT_NETWORK_CLI
+        bool "Enable network CLI support"
+        default y
+        help
+            Compile the authenticated TCP command-line server. The server is
+            still disabled at runtime until it is configured with a password
+            and enabled in ad2iot.ini or through the USB CLI.
+endmenu

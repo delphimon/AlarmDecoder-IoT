@@ -334,7 +334,7 @@ static void _cli_cmd_ad2term_event(const char *string)
         }
 
         // Host to AD2*
-        int len = uart_read_bytes(UART_NUM_0, rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
+        int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
         if (len == -1) {
             // An error happend. Sleep for a bit and try again?
             ESP_LOGE(TAG, "Error reading for UART aborting task.");

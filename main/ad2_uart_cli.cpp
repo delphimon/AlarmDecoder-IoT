@@ -31,6 +31,7 @@ static const char *TAG = "UARTCLI";
 
 // esp component includes
 #include "driver/uart.h"
+#include <lwip/sockets.h>
 
 // specific includes
 #include "ad2_cli_cmd.h"
@@ -38,6 +39,8 @@ static const char *TAG = "UARTCLI";
 //#define DEBUG_CLI
 
 static struct cli_command_list *cli_cmd_list;
+static TaskHandle_t cli_socket_task = NULL;
+static int cli_socket_fd = -1;
 
 // forward decl
 static void cli_cmd_help(const char *string);
@@ -93,7 +96,7 @@ static cli_cmd_t* cli_find_command (const char* input_string)
  *
  * @param [in]input_string command string to test for.
  */
-static void cli_process_command(char* input_string)
+void cli_process_command(char* input_string)
 {
     cli_cmd_t *command;
 
@@ -105,6 +108,93 @@ static void cli_process_command(char* input_string)
     }
 
     command->command_fn(input_string);
+}
+
+/**
+ * @brief Route CLI I/O from the calling task to a socket.
+ *
+ * Command handlers use the normal ad2_printf_host() functions. The output
+ * helpers ultimately call cli_write_bytes(), which selects this socket only
+ * for the task executing the network CLI session. Other tasks and logging
+ * remain attached to the USB UART.
+ */
+void cli_set_io_socket(int socket_fd)
+{
+    taskENTER_CRITICAL(&spinlock);
+    cli_socket_task = xTaskGetCurrentTaskHandle();
+    cli_socket_fd = socket_fd;
+    taskEXIT_CRITICAL(&spinlock);
+}
+
+void cli_clear_io_socket()
+{
+    taskENTER_CRITICAL(&spinlock);
+    if (cli_socket_task == xTaskGetCurrentTaskHandle()) {
+        cli_socket_task = NULL;
+        cli_socket_fd = -1;
+    }
+    taskEXIT_CRITICAL(&spinlock);
+}
+
+static int _cli_current_socket()
+{
+    int socket_fd = -1;
+    taskENTER_CRITICAL(&spinlock);
+    if (cli_socket_task == xTaskGetCurrentTaskHandle()) {
+        socket_fd = cli_socket_fd;
+    }
+    taskEXIT_CRITICAL(&spinlock);
+    return socket_fd;
+}
+
+bool cli_is_socket_io()
+{
+    return _cli_current_socket() >= 0;
+}
+
+int cli_write_bytes(const char *buffer, size_t length)
+{
+    int socket_fd = _cli_current_socket();
+    if (socket_fd < 0) {
+        return uart_write_bytes(UART_NUM_0, buffer, length);
+    }
+
+    size_t sent = 0;
+    while (sent < length) {
+        int result = send(socket_fd, buffer + sent, length - sent, 0);
+        if (result < 0 && errno == EINTR) {
+            continue;
+        }
+        if (result <= 0) {
+            return sent ? sent : result;
+        }
+        sent += result;
+    }
+    return sent;
+}
+
+int cli_read_bytes(uint8_t *buffer, size_t length, TickType_t timeout)
+{
+    int socket_fd = _cli_current_socket();
+    if (socket_fd < 0) {
+        return uart_read_bytes(UART_NUM_0, buffer, length, timeout);
+    }
+
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET(socket_fd, &read_fds);
+
+    struct timeval wait = {};
+    wait.tv_sec = timeout * portTICK_PERIOD_MS / 1000;
+    wait.tv_usec = (timeout * portTICK_PERIOD_MS % 1000) * 1000;
+    int result = select(socket_fd + 1, &read_fds, NULL, NULL, &wait);
+    if (result == 0) {
+        return 0;
+    }
+    if (result < 0) {
+        return -1;
+    }
+    return recv(socket_fd, buffer, length, 0);
 }
 
 /**
@@ -162,8 +252,7 @@ static void cli_cmd_help(const char *cmd)
             // spool bytes until we reach the null term.
             char *help_string = command->help_string;
             while (*help_string) {
-                uart_write_bytes(UART_NUM_0, help_string, 1);
-                uart_wait_tx_done(UART_NUM_0, 100);
+                cli_write_bytes(help_string, 1);
                 help_string++;
             }
             showhelp = false;
@@ -279,7 +368,7 @@ static void uart_cli_task(void *pvParameters)
 
         // Read data from the UART
         memset(rx_buffer, 0, AD2_UART_RX_BUFF_SIZE);
-        int len = uart_read_bytes(UART_NUM_0, rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
+        int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
 
         if (len < 0) {
             ESP_LOGE(TAG, "%s: uart cli read error.", __func__);
@@ -439,8 +528,16 @@ static void uart_cli_task(void *pvParameters)
 static TaskHandle_t cli_task_handle = NULL;
 void cli_task_notify()
 {
+    TaskHandle_t socket_task = NULL;
+    taskENTER_CRITICAL(&spinlock);
+    socket_task = cli_socket_task;
+    taskEXIT_CRITICAL(&spinlock);
+
     if (cli_task_handle) {
         xTaskNotifyGive(cli_task_handle);
+    }
+    if (socket_task && socket_task != cli_task_handle) {
+        xTaskNotifyGive(socket_task);
     }
 }
 
