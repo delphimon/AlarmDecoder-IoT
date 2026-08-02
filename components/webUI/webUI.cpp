@@ -33,6 +33,7 @@ static const char *TAG = "WEBUI";
 
 // esp component includes
 #include "esp_http_server.h"
+#include "esp_https_server.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_spiffs.h"
@@ -51,6 +52,9 @@ static const char *TAG = "WEBUI";
 #define WEBUI_COMMAND          "webui"
 #define WEBUI_SUBCMD_ENABLE    "enable"
 #define WEBUI_SUBCMD_ACL       "acl"
+#define WEBUI_SUBCMD_SSL       "ssl"
+#define WEBUI_SUBCMD_SSLCERT   "sslcert"
+#define WEBUI_SUBCMD_SSLKEY    "sslkey"
 
 #define WEBUI_CONFIG_SECTION  "webui"
 
@@ -58,6 +62,8 @@ static const char *TAG = "WEBUI";
 #define WEBUI_HISTORY_SIZE 64
 #define WEBUI_WS_MAX_PAYLOAD 256
 #define WEBUI_CONFIG_MAX_BYTES (64 * 1024)
+#define WEBUI_DEFAULT_SSL_CERT "certs/fullchain.pem"
+#define WEBUI_DEFAULT_SSL_KEY  "certs/privkey.pem"
 
 /* Max length a file path can have on storage */
 #define FILE_PATH_MAX (255)
@@ -68,6 +74,10 @@ static const char *TAG = "WEBUI";
 // Global handle to httpd server
 httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
 httpd_handle_t server = nullptr;
+static bool webui_tls_enabled = false;
+static bool webui_server_uses_tls = false;
+static std::string webui_tls_cert_setting = WEBUI_DEFAULT_SSL_CERT;
+static std::string webui_tls_key_setting = WEBUI_DEFAULT_SSL_KEY;
 
 /* ACL control */
 ad2_acl_check webui_acl;
@@ -78,12 +88,18 @@ ad2_acl_check webui_acl;
 char * WEBUI_SUBCMD [] = {
     (char*)WEBUI_SUBCMD_ENABLE,
     (char*)WEBUI_SUBCMD_ACL,
+    (char*)WEBUI_SUBCMD_SSL,
+    (char*)WEBUI_SUBCMD_SSLCERT,
+    (char*)WEBUI_SUBCMD_SSLKEY,
     0 // EOF
 };
 
 enum {
     WEBUI_SUBCMD_ENABLE_ID = 0,
     WEBUI_SUBCMD_ACL_ID,
+    WEBUI_SUBCMD_SSL_ID,
+    WEBUI_SUBCMD_SSLCERT_ID,
+    WEBUI_SUBCMD_SSLKEY_ID,
 };
 
 /**
@@ -311,6 +327,18 @@ void free_ws_session_storage(void *ctx)
     }
 }
 
+static bool webui_request_allowed(httpd_req_t *req)
+{
+    std::string ip;
+    hal_get_socket_client_ip(httpd_req_to_sockfd(req), ip);
+    if (webui_acl.find(ip)) {
+        return true;
+    }
+    ESP_LOGW(TAG, "Rejecting request from '%s'", ip.c_str());
+    httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Access denied by Web UI ACL");
+    return false;
+}
+
 #if CONFIG_HTTPD_WS_SUPPORT
 /**
  * @brief Send current alarm state to web socket connection. Lookup
@@ -373,6 +401,9 @@ static esp_err_t webui_ws_error(httpd_req_t *req, const char *message)
  */
 esp_err_t ad2ws_handler(httpd_req_t *req)
 {
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
     if (req->method == HTTP_GET) {
         return ESP_OK;
     }
@@ -556,6 +587,9 @@ static esp_err_t webui_send_json_response(httpd_req_t *req, cJSON *root)
 /** Read-only current state API: GET /api/state?partition=0 */
 static esp_err_t webui_state_handler(httpd_req_t *req)
 {
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
     int partID = webui_query_int(req, "partition", 0);
     if (partID < 0 || partID > AD2_MAX_PARTITION) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid partition slot");
@@ -567,6 +601,9 @@ static esp_err_t webui_state_handler(httpd_req_t *req)
 /** Reboot-scoped activity API: GET /api/history?limit=64&partition=1 */
 static esp_err_t webui_history_handler(httpd_req_t *req)
 {
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
     int limit = webui_query_int(req, "limit", WEBUI_HISTORY_SIZE);
     int partition = webui_query_int(req, "partition", -1);
     if (limit < 1 || limit > WEBUI_HISTORY_SIZE) {
@@ -588,6 +625,9 @@ static void webui_add_file_status(cJSON *parent, const char *name, const char *p
 /** Build, network, storage, and runtime status: GET /api/system */
 static esp_err_t webui_system_handler(httpd_req_t *req)
 {
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
     cJSON *root = cJSON_CreateObject();
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(root, "firmware_version", ad2_firmware_version());
@@ -607,6 +647,8 @@ static esp_err_t webui_system_handler(httpd_req_t *req)
     cJSON_AddStringToObject(network, "mode", network_mode_name);
     cJSON_AddStringToObject(network, "ip_address", local_ip.c_str());
     cJSON_AddBoolToObject(network, "connected", hal_get_network_connected());
+    cJSON_AddStringToObject(network, "web_protocol", webui_server_uses_tls ? "HTTPS" : "HTTP");
+    cJSON_AddNumberToObject(network, "web_port", webui_server_uses_tls ? 443 : 80);
     cJSON_AddItemToObject(root, "network", network);
 
     cJSON *storage = cJSON_CreateObject();
@@ -773,9 +815,59 @@ static bool webui_read_file(const char *path, std::string &contents)
     return ok;
 }
 
+static bool webui_resolve_sd_path(const std::string &setting, std::string &path)
+{
+    std::string candidate = setting;
+    ad2_trim(candidate);
+    if (candidate.empty() || candidate.find("..") != std::string::npos ||
+            candidate.find('\\') != std::string::npos) {
+        return false;
+    }
+    if (candidate[0] == '/') {
+        if (candidate.rfind("/" AD2_USD_MOUNT_POINT "/", 0) != 0) {
+            return false;
+        }
+        path = candidate;
+    } else {
+        if (candidate.rfind(AD2_USD_MOUNT_POINT "/", 0) == 0) {
+            candidate.erase(0, strlen(AD2_USD_MOUNT_POINT) + 1);
+        }
+        path = "/" AD2_USD_MOUNT_POINT "/" + candidate;
+    }
+    return true;
+}
+
+static bool webui_load_tls_material(std::string &certificate, std::string &private_key)
+{
+    std::string cert_path;
+    std::string key_path;
+    if (!g_uSD_mounted ||
+            !webui_resolve_sd_path(webui_tls_cert_setting, cert_path) ||
+            !webui_resolve_sd_path(webui_tls_key_setting, key_path)) {
+        ESP_LOGE(TAG, "HTTPS requires valid certificate paths beneath /" AD2_USD_MOUNT_POINT);
+        return false;
+    }
+    if (!webui_read_file(cert_path.c_str(), certificate) ||
+            certificate.find("-----BEGIN CERTIFICATE-----") == std::string::npos) {
+        ESP_LOGE(TAG, "Unable to load PEM certificate chain '%s'", cert_path.c_str());
+        return false;
+    }
+    if (!webui_read_file(key_path.c_str(), private_key) ||
+            (private_key.find("-----BEGIN PRIVATE KEY-----") == std::string::npos &&
+             private_key.find("-----BEGIN RSA PRIVATE KEY-----") == std::string::npos &&
+             private_key.find("-----BEGIN EC PRIVATE KEY-----") == std::string::npos)) {
+        ESP_LOGE(TAG, "Unable to load PEM private key '%s'", key_path.c_str());
+        return false;
+    }
+    return true;
+}
+
 /** Redacted configuration text: GET /api/config?source=active|spiffs|sd */
 static esp_err_t webui_config_handler(httpd_req_t *req)
 {
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
     std::string source;
     if (!webui_query_value(req, "source", source)) {
         source = "active";
@@ -810,6 +902,9 @@ static esp_err_t webui_config_handler(httpd_req_t *req)
 /** Bounded reboot-scoped device log: GET /api/logs?limit=64 */
 static esp_err_t webui_logs_handler(httpd_req_t *req)
 {
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
     int limit = webui_query_int(req, "limit", 64);
     if (limit < 1 || limit > 64) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Limit must be between 1 and 64");
@@ -839,6 +934,10 @@ static esp_err_t webui_logs_handler(httpd_req_t *req)
  */
 esp_err_t file_get_handler(httpd_req_t *req)
 {
+
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
 
     // state: send raw file or process as template
     bool apply_template = false;
@@ -1055,27 +1154,6 @@ void webui_on_state_change(std::string *msg, AD2PartitionState *s, void *arg)
 }
 
 /**
- * @brief callback after accept before any R/W on a client.
- * Test if we want this connection return ESP_OK to keep ESP_FAIL to reject.
- */
-esp_err_t http_acl_test(httpd_handle_t hd, int sockfd)
-{
-    std::string IP;
-    // Get a string for the client address connected to this IP.
-    hal_get_socket_client_ip(sockfd, IP);
-    /* ACL test */
-    if (!webui_acl.find(IP)) {
-        ESP_LOGW(TAG, "Rejecting client connection from '%s'", IP.c_str());
-        // FIXME: Not able to make it close clean. If I dont send something the the browser
-        // will try again. Sending here is a problem because it will close before sending yet it helps?
-        std::string Err = "HTTP/1.0 403 Forbidden\r\n\r\n\r\nAccess denied check ACL list\r\n";
-        send(sockfd, Err.c_str(), Err.length(), 0);
-        return ESP_FAIL;
-    }
-    return ESP_OK;
-}
-
-/**
  * @brief webui server task
  *
  * @param [in]pvParameters currently not used NULL.
@@ -1097,8 +1175,9 @@ void webui_server_task(void *pvParameters)
 
     // Configure the web server and handlers.
     server_config.uri_match_fn = httpd_uri_match_wildcard;
-    server_config.open_fn = http_acl_test;
     server_config.lru_purge_enable = true;
+    server_config.max_open_sockets = MAX_CLIENTS;
+    server_config.max_uri_handlers = 8;
 #if CONFIG_HTTPD_WS_SUPPORT
     httpd_uri_t ad2ws_server = {
         .uri       = "/ad2ws",
@@ -1180,8 +1259,29 @@ void webui_server_task(void *pvParameters)
     for (;;) {
         if (hal_get_network_connected() && server==nullptr) {
 
-            // Start the httpd server and handlers.
-            if ((err = httpd_start(&server, &server_config)) == ESP_OK) {
+            if (webui_tls_enabled) {
+                std::string certificate;
+                std::string private_key;
+                if (!webui_load_tls_material(certificate, private_key)) {
+                    vTaskDelay(10000 / portTICK_PERIOD_MS);
+                    continue;
+                }
+                httpd_ssl_config_t tls_config = HTTPD_SSL_CONFIG_DEFAULT();
+                tls_config.httpd = server_config;
+                tls_config.httpd.stack_size = 10240;
+                tls_config.servercert = (const uint8_t *)certificate.c_str();
+                tls_config.servercert_len = certificate.length() + 1;
+                tls_config.prvtkey_pem = (const uint8_t *)private_key.c_str();
+                tls_config.prvtkey_len = private_key.length() + 1;
+                err = httpd_ssl_start(&server, &tls_config);
+            } else {
+                err = httpd_start(&server, &server_config);
+            }
+
+            // Register handlers after the HTTP or HTTPS listener starts.
+            if (err == ESP_OK) {
+                webui_server_uses_tls = webui_tls_enabled;
+                ESP_LOGI(TAG, "Web UI listening with %s", webui_server_uses_tls ? "HTTPS" : "HTTP");
                 // Set URI handlers
 #if CONFIG_HTTPD_WS_SUPPORT
                 httpd_register_uri_handler(server, &ad2ws_server);
@@ -1194,7 +1294,8 @@ void webui_server_task(void *pvParameters)
                 httpd_register_uri_handler(server, &file_server);
             } else {
                 // error long 10s sleep.
-                ESP_LOGW(TAG, "Error calling httpd_start [%s]", esp_err_to_name(err));
+                ESP_LOGW(TAG, "Error starting %s server [%s]",
+                         webui_tls_enabled ? "HTTPS" : "HTTP", esp_err_to_name(err));
                 vTaskDelay(10000 / portTICK_PERIOD_MS);
             }
         } else {
@@ -1202,11 +1303,13 @@ void webui_server_task(void *pvParameters)
             if (!hal_get_network_connected() && server!=nullptr) {
                 taskENTER_CRITICAL(&spinlock);
                 httpd_handle_t ts = server;
+                const bool stop_tls = webui_server_uses_tls;
                 server = nullptr;
+                webui_server_uses_tls = false;
                 taskEXIT_CRITICAL(&spinlock);
-                err = httpd_stop(ts);
+                err = stop_tls ? httpd_ssl_stop(ts) : httpd_stop(ts);
                 if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "Error calling httpd_start [%s]", esp_err_to_name(err));
+                    ESP_LOGW(TAG, "Error stopping Web UI server [%s]", esp_err_to_name(err));
                 }
             }
             // short 1s sleep
@@ -1285,6 +1388,41 @@ static void _cli_cmd_webui_event(const char *string)
                 ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_ACL, acl);
                 ad2_printf_host(false, WEBUI_COMMAND " 'acl' set to '%s'.\r\n", acl.c_str());
                 break;
+            case WEBUI_SUBCMD_SSL_ID:
+                if (ad2_copy_nth_arg(arg, string, 2) >= 0) {
+                    ad2_set_config_key_bool(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_SSL,
+                                            (arg[0] == 'Y' || arg[0] == 'y'));
+                    ad2_printf_host(false, "Success setting value. Restart required to take effect.\r\n");
+                }
+                {
+                    bool ssl = false;
+                    ad2_get_config_key_bool(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_SSL, &ssl);
+                    ad2_printf_host(false, "WebUI HTTPS is '%s'.\r\n", ssl ? "Enabled" : "Disabled");
+                }
+                break;
+            case WEBUI_SUBCMD_SSLCERT_ID:
+            case WEBUI_SUBCMD_SSLKEY_ID:
+                {
+                    const char *key = i == WEBUI_SUBCMD_SSLCERT_ID ? WEBUI_SUBCMD_SSLCERT : WEBUI_SUBCMD_SSLKEY;
+                    const char *default_path = i == WEBUI_SUBCMD_SSLCERT_ID ?
+                                               WEBUI_DEFAULT_SSL_CERT : WEBUI_DEFAULT_SSL_KEY;
+                    if (ad2_copy_nth_arg(arg, string, 2, true) >= 0) {
+                        if (arg == "-") {
+                            arg = default_path;
+                        }
+                        std::string resolved;
+                        if (!webui_resolve_sd_path(arg, resolved)) {
+                            ad2_printf_host(false, "Path must remain beneath /" AD2_USD_MOUNT_POINT ". Not saved.\r\n");
+                            break;
+                        }
+                        ad2_set_config_key_string(WEBUI_CONFIG_SECTION, key, arg.c_str());
+                        ad2_printf_host(false, "Success setting value. Restart required to take effect.\r\n");
+                    }
+                    std::string saved = default_path;
+                    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, key, saved);
+                    ad2_printf_host(false, "WebUI '%s' path is '%s'.\r\n", key, saved.c_str());
+                }
+                break;
             default:
                 break;
             }
@@ -1306,9 +1444,16 @@ static struct cli_command webui_cmd_list[] = {
         "    enable [Y|N]            Set or get enable flag\r\n"
         "    acl [aclString|-]       Set or get ACL CIDR CSV list\r\n"
         "                            use - to delete\r\n"
+        "    ssl [Y|N]               Enable HTTPS on port 443\r\n"
+        "    sslcert [path|-]        PEM full-chain path beneath /sdcard\r\n"
+        "    sslkey [path|-]         PEM private-key path beneath /sdcard\r\n"
+        "                            use - to restore default paths\r\n"
         "Examples:\r\n"
         "    ```webui enable Y```\r\n"
         "    ```webui acl 192.168.0.0/28,192.168.1.0-192.168.1.10,192.168.3.4```\r\n"
+        "    ```webui sslcert certs/fullchain.pem```\r\n"
+        "    ```webui sslkey certs/privkey.pem```\r\n"
+        "    ```webui ssl Y```\r\n"
         , _cli_cmd_webui_event
     }
 };
@@ -1338,6 +1483,10 @@ void webui_init(void)
         ad2_printf_host(true, "%s: daemon disabled.", TAG);
         return;
     }
+
+    ad2_get_config_key_bool(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_SSL, &webui_tls_enabled);
+    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_SSLCERT, webui_tls_cert_setting);
+    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_SSLKEY, webui_tls_key_setting);
 
     webui_history_mutex = xSemaphoreCreateMutex();
     if (!webui_history_mutex) {

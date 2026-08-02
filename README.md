@@ -543,16 +543,28 @@ Commands:
     enable [Y|N]            Set or get enable flag
     acl [aclString|-]       Set or get ACL CIDR CSV list
                             use - to delete
+    ssl [Y|N]               Enable HTTPS on port 443
+    sslcert [path|-]        PEM full-chain path beneath /sdcard
+    sslkey [path|-]         PEM private-key path beneath /sdcard
+                            use - to restore default paths
 Examples:
     ```webui enable Y```
     ```webui acl 192.168.0.0/28,192.168.1.0-192.168.1.10,192.168.3.4```
+    ```webui sslcert certs/fullchain.pem```
+    ```webui sslkey certs/privkey.pem```
+    ```webui ssl Y```
 ```
 ```console
 # Example config file ini setting
 [webui]
 enable = true
 acl = 192.168.0.0/16, 10.10.0.0/16
+ssl = true
+sslcert = certs/fullchain.pem
+sslkey = certs/privkey.pem
 ```
+HTTPS is opt-in and listens on port 443. Copy the PEM certificate chain and unencrypted private key onto the SD card at `/certs/fullchain.pem` and `/certs/privkey.pem`, or configure different paths beneath `/sdcard`. The standard Let's Encrypt `fullchain.pem` and `privkey.pem` files are supported. FAT32 does not preserve Certbot symlinks, so copy the target file contents. Restart the AD2IoT after enabling HTTPS or replacing renewed certificates. If HTTPS is enabled but either PEM file is unavailable or invalid, the Web UI fails closed instead of falling back to HTTP.
+
 ###  5.4. <a name='smartthings-direct-connected-device.'></a>SmartThings Direct Connected device.
 ###### ```Only available in stsdk firmware build```
 Direct-connected devices connect directly to the SmartThings cloud. The SDK for Direct Connected Devices is equipped to manage all MQTT topics and onboarding requirements, freeing you to focus on the actions and attributes of your device. To facilitate the development of device application in an original chipset SDK, the core device library and the examples were separated into two git repositories. That is, if you want to use the core device library in your original chipset SDK that installed before, you may simply link it to develop a device application in your existing development environment. For more info see https://github.com/SmartThingsCommunity/st-device-sdk-c-ref.

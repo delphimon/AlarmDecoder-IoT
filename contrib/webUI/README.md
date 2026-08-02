@@ -29,6 +29,20 @@ The dashboard provides live partition state, keypad display text, power/battery/
 
 Responses are JSON and use `Cache-Control: no-store`. The same webUI IP/CIDR ACL applies to the API and WebSocket endpoint.
 
+## HTTPS and Let's Encrypt
+
+HTTPS is opt-in and listens on port 443. Copy the actual PEM file contents (not Certbot symlinks) to `certs/fullchain.pem` and `certs/privkey.pem` on the FAT32 SD card, then configure and restart:
+
+```ini
+[webui]
+enable = true
+ssl = true
+sslcert = certs/fullchain.pem
+sslkey = certs/privkey.pem
+```
+
+Paths must remain beneath `/sdcard`. The private key must be unencrypted because the embedded server cannot prompt for a passphrase. Restart after certificate renewal so the new files are loaded. When HTTPS is enabled, missing or invalid PEM files prevent the Web UI from starting rather than exposing an HTTP fallback.
+
 ## WebSocket commands
 
 - `!SYNC:<partID>,<codeID>` selects the configured partition and code slots and returns current state.

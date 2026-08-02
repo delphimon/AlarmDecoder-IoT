@@ -18,12 +18,6 @@
       <div id="connectionBadge" class="connection offline"><span></span><b>Offline</b></div>
     </header>
 
-    <section class="device-summary" aria-label="Device connection information">
-      <div><span>Build</span><b id="buildSummary">—</b></div>
-      <div><span>Connection</span><b id="networkModeSummary">—</b></div>
-      <div><span>IP address</span><b id="ipSummary">—</b></div>
-    </section>
-
     <nav class="tabs" aria-label="Main navigation">
       <button class="tab active" data-view="dashboard">Dashboard</button>
       <button class="tab" data-view="activity">Activity <span id="activityCount" class="count">0</span></button>
@@ -130,6 +124,7 @@
               <dl>
                 <div><dt>Mode</dt><dd id="diagNetworkMode">—</dd></div>
                 <div><dt>Address</dt><dd id="diagIp">—</dd></div>
+                <div><dt>Web access</dt><dd id="diagWebProtocol">—</dd></div>
                 <div><dt>State</dt><dd id="diagNetworkState">—</dd></div>
                 <div><dt>AD2 source</dt><dd id="diagAd2Source">—</dd></div>
                 <div><dt>UUID</dt><dd id="diagUuid">—</dd></div>
@@ -166,6 +161,12 @@
         </details>
       </section>
     </main>
+
+    <footer class="device-summary" aria-label="Device connection information">
+      <div><span>Build</span><b id="buildSummary">—</b></div>
+      <div><span>Connection</span><b id="networkModeSummary">—</b></div>
+      <div><span>IP address</span><b id="ipSummary">—</b></div>
+    </footer>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>

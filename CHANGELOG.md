@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
-- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1105`; `version.txt` is now the single runtime version source.
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1107`; `version.txt` is now the single runtime version source.
+- [x] WEBUI: raise the HTTP request-header limit to support normal modern-browser HTTPS requests without 431 responses.
+- [x] WEBUI: compact the dashboard, move build/network details below the primary controls, show build time, and add opt-in HTTPS using SD-card PEM certificate chains/private keys.
 - [x] WEBUI: show firmware build/date, network mode and IP; add a read-only Settings pane for runtime health, storage state, redacted active/SPIFFS/SD configuration, and reboot-scoped device logs.
 - [x] WEBUI: add a responsive live dashboard, full keypad, reboot-scoped activity history, read-only state/history API, protocol validation, and safer static-file handling.
 - [x] USDUPDATE: validate image size and OTA results, retain failed images for diagnosis, and only select/restart into a successfully validated application image.

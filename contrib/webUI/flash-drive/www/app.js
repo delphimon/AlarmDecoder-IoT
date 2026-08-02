@@ -109,8 +109,10 @@
     const built = [system.build_date, system.build_time].filter(Boolean).join(" ");
 
     byId("headerVersion").textContent = system.firmware_version || "Version —";
-    byId("buildSummary").textContent = (system.firmware_version || "Unknown") + (system.build_date ? " · " + system.build_date : "");
-    byId("networkModeSummary").textContent = network.mode || "Unknown";
+    byId("buildSummary").textContent = (system.firmware_version || "Unknown") +
+      (built ? " · " + built : "");
+    byId("networkModeSummary").textContent = (network.mode || "Unknown") +
+      (network.web_protocol ? " · " + network.web_protocol : "");
     byId("ipSummary").textContent = network.ip_address || "Unavailable";
 
     byId("diagVersion").textContent = system.firmware_version || "—";
@@ -120,6 +122,7 @@
     byId("diagUptime").textContent = formatDuration(system.uptime_ms);
     byId("diagNetworkMode").textContent = network.mode || "—";
     byId("diagIp").textContent = network.ip_address || "—";
+    byId("diagWebProtocol").textContent = network.web_protocol ? network.web_protocol + " · port " + network.web_port : "—";
     byId("diagNetworkState").textContent = network.connected ? "Connected" : "Disconnected";
     byId("diagAd2Source").textContent = device.alarmdecoder_source || "—";
     byId("diagUuid").textContent = device.uuid || "—";

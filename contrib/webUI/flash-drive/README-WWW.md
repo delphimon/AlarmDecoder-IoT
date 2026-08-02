@@ -1,6 +1,9 @@
 ### Place the contents of this folder in the root directory of a fat32 formatted uSD disk.
 ```
 ├── README-WWW.md
+├── certs
+│  ├── fullchain.pem  (optional; copy your current PEM chain)
+│  └── privkey.pem    (optional; copy your unencrypted PEM key)
 └── www
    ├── 404.html
    ├── 404.html.tpl
