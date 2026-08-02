@@ -990,7 +990,7 @@ void stsdk_init(void)
     ad2_get_config_key_string(STSDK_CONFIG_SECTION, STSDK_SUBCMD_PUBKEY, publicKey);
     ad2_get_config_key_string(STSDK_CONFIG_SECTION, STSDK_SUBCMD_SERIAL, serialNumber);
 
-    cJSON_AddStringToObject(deviceInfo, "firmwareVersion", FIRMWARE_VERSION);
+    cJSON_AddStringToObject(deviceInfo, "firmwareVersion", ad2_firmware_version());
     cJSON_AddStringToObject(deviceInfo, "privateKey", privateKey.c_str());
     cJSON_AddStringToObject(deviceInfo, "publicKey", publicKey.c_str());
     cJSON_AddStringToObject(deviceInfo, "serialNumber", serialNumber.c_str());
@@ -1398,7 +1398,7 @@ void cap_current_version_init_cb(IOT_CAP_HANDLE *handle, void *usr_data)
     // that is loaded from device_info.json
 
     /* Send avail version to ota cap handler */
-    ST_CAP_SEND_ATTR_STRING(handle, (char*)"availableVersion", (char *)FIRMWARE_VERSION, NULL, NULL, sequence_no);
+    ST_CAP_SEND_ATTR_STRING(handle, (char*)"availableVersion", (char *)ad2_firmware_version(), NULL, NULL, sequence_no);
     if (sequence_no < 0) {
         ESP_LOGE(TAG, "failed to send init_data");
     }

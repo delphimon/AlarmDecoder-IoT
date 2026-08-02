@@ -13,15 +13,22 @@
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">AD</span>
-        <div><strong>AlarmDecoder</strong><small>Partition <span id="partitionLabel">0</span></small></div>
+        <div><strong>AlarmDecoder</strong><small>Partition <span id="partitionLabel">0</span> · <span id="headerVersion">Version —</span></small></div>
       </div>
       <div id="connectionBadge" class="connection offline"><span></span><b>Offline</b></div>
     </header>
+
+    <section class="device-summary" aria-label="Device connection information">
+      <div><span>Build</span><b id="buildSummary">—</b></div>
+      <div><span>Connection</span><b id="networkModeSummary">—</b></div>
+      <div><span>IP address</span><b id="ipSummary">—</b></div>
+    </section>
 
     <nav class="tabs" aria-label="Main navigation">
       <button class="tab active" data-view="dashboard">Dashboard</button>
       <button class="tab" data-view="activity">Activity <span id="activityCount" class="count">0</span></button>
       <button class="tab" data-view="keypad">Keypad</button>
+      <button class="tab" data-view="settings">Settings</button>
     </nav>
 
     <main>
@@ -98,6 +105,65 @@
           </div>
           <p class="keypad-help">Keys are sent immediately to the selected partition. Number keys on a physical keyboard are supported.</p>
         </section>
+      </section>
+
+      <section id="settingsView" class="view">
+        <section class="panel diagnostics-heading">
+          <div class="section-heading">
+            <div><p class="eyebrow">Read-only diagnostics</p><h2>Device settings and health</h2></div>
+            <button id="reloadDiagnostics" class="text-button">Reload</button>
+          </div>
+          <p class="section-note">Credential values and alarm codes are redacted by the device before being sent to the browser.</p>
+          <div class="diagnostic-grid">
+            <article class="diagnostic-card">
+              <h3>Firmware</h3>
+              <dl>
+                <div><dt>Version</dt><dd id="diagVersion">—</dd></div>
+                <div><dt>Built</dt><dd id="diagBuild">—</dd></div>
+                <div><dt>Build flags</dt><dd id="diagBuildFlags">—</dd></div>
+                <div><dt>ESP-IDF</dt><dd id="diagIdf">—</dd></div>
+                <div><dt>Uptime</dt><dd id="diagUptime">—</dd></div>
+              </dl>
+            </article>
+            <article class="diagnostic-card">
+              <h3>Network</h3>
+              <dl>
+                <div><dt>Mode</dt><dd id="diagNetworkMode">—</dd></div>
+                <div><dt>Address</dt><dd id="diagIp">—</dd></div>
+                <div><dt>State</dt><dd id="diagNetworkState">—</dd></div>
+                <div><dt>AD2 source</dt><dd id="diagAd2Source">—</dd></div>
+                <div><dt>UUID</dt><dd id="diagUuid">—</dd></div>
+              </dl>
+            </article>
+            <article class="diagnostic-card">
+              <h3>Storage and memory</h3>
+              <dl>
+                <div><dt>Active config</dt><dd id="diagConfigSource">—</dd></div>
+                <div><dt>SD card</dt><dd id="diagSd">—</dd></div>
+                <div><dt>SPIFFS</dt><dd id="diagSpiffs">—</dd></div>
+                <div><dt>Free heap</dt><dd id="diagHeap">—</dd></div>
+                <div><dt>Lowest heap</dt><dd id="diagMinHeap">—</dd></div>
+              </dl>
+            </article>
+          </div>
+        </section>
+
+        <details class="panel config-panel" open>
+          <summary><span><small>Runtime snapshot</small>Current configured settings</span></summary>
+          <pre id="activeConfig" class="diagnostic-output">Open Settings to load diagnostics.</pre>
+        </details>
+        <details class="panel config-panel">
+          <summary><span><small>Internal storage</small>SPIFFS /ad2iot.ini</span></summary>
+          <pre id="spiffsConfig" class="diagnostic-output">Not loaded.</pre>
+        </details>
+        <details class="panel config-panel">
+          <summary><span><small>Removable storage</small>SD card /ad2iot.ini</span></summary>
+          <pre id="sdConfig" class="diagnostic-output">Not loaded.</pre>
+        </details>
+        <details class="panel config-panel" open>
+          <summary><span><small>This boot session</small>Recent device logs</span></summary>
+          <pre id="deviceLogs" class="diagnostic-output">Not loaded.</pre>
+        </details>
       </section>
     </main>
 

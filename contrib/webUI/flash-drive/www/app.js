@@ -20,6 +20,9 @@
     reconnectTimer: null,
     state: null,
     history: [],
+    system: null,
+    diagnosticsLoaded: false,
+    diagnosticsLoading: false,
     serverUptime: 0,
     keypadMask: "",
     keypadClearTimer: null,
@@ -62,6 +65,114 @@
     const value = byId(id);
     value.textContent = text;
     value.parentElement.className = "indicator" + (tone ? " " + tone : "");
+  }
+
+  function apiURL(path) {
+    if (!wsHost) return path;
+    const base = /^wss?:\/\//i.test(wsHost) ? wsHost.replace(/^ws/i, "http") : "http://" + wsHost;
+    return base.replace(/\/$/, "") + path;
+  }
+
+  function formatBytes(value) {
+    const bytes = Number(value) || 0;
+    if (!bytes) return "—";
+    const units = ["B", "KiB", "MiB", "GiB"];
+    let amount = bytes;
+    let unit = 0;
+    while (amount >= 1024 && unit < units.length - 1) {
+      amount /= 1024;
+      unit++;
+    }
+    return (amount >= 10 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)) + " " + units[unit];
+  }
+
+  function formatDuration(milliseconds) {
+    let seconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
+    const days = Math.floor(seconds / 86400);
+    seconds %= 86400;
+    const hours = Math.floor(seconds / 3600);
+    seconds %= 3600;
+    const minutes = Math.floor(seconds / 60);
+    if (days) return days + "d " + hours + "h " + minutes + "m";
+    if (hours) return hours + "h " + minutes + "m";
+    return minutes + "m " + (seconds % 60) + "s";
+  }
+
+  function renderSystem(system) {
+    app.system = system;
+    const network = system.network || {};
+    const storage = system.storage || {};
+    const sd = storage.sd_card || {};
+    const spiffs = storage.spiffs || {};
+    const memory = system.memory || {};
+    const device = system.device || {};
+    const built = [system.build_date, system.build_time].filter(Boolean).join(" ");
+
+    byId("headerVersion").textContent = system.firmware_version || "Version —";
+    byId("buildSummary").textContent = (system.firmware_version || "Unknown") + (system.build_date ? " · " + system.build_date : "");
+    byId("networkModeSummary").textContent = network.mode || "Unknown";
+    byId("ipSummary").textContent = network.ip_address || "Unavailable";
+
+    byId("diagVersion").textContent = system.firmware_version || "—";
+    byId("diagBuild").textContent = built || "—";
+    byId("diagBuildFlags").textContent = system.build_flags || "—";
+    byId("diagIdf").textContent = system.idf_version || "—";
+    byId("diagUptime").textContent = formatDuration(system.uptime_ms);
+    byId("diagNetworkMode").textContent = network.mode || "—";
+    byId("diagIp").textContent = network.ip_address || "—";
+    byId("diagNetworkState").textContent = network.connected ? "Connected" : "Disconnected";
+    byId("diagAd2Source").textContent = device.alarmdecoder_source || "—";
+    byId("diagUuid").textContent = device.uuid || "—";
+    byId("diagConfigSource").textContent = storage.active_config_source || "—";
+    byId("diagSd").textContent = sd.mounted ? "Mounted · " + formatBytes(sd.free_bytes) + " free / " + formatBytes(sd.total_bytes) : "Not installed";
+    byId("diagSpiffs").textContent = spiffs.mounted ? formatBytes(spiffs.used_bytes) + " used / " + formatBytes(spiffs.total_bytes) : "Unavailable";
+    byId("diagHeap").textContent = formatBytes(memory.free_heap_bytes);
+    byId("diagMinHeap").textContent = formatBytes(memory.minimum_free_heap_bytes);
+  }
+
+  async function fetchSystem() {
+    const response = await fetch(apiURL("/api/system"), { cache: "no-store" });
+    if (!response.ok) throw new Error("System status unavailable");
+    const system = await response.json();
+    renderSystem(system);
+    return system;
+  }
+
+  async function fetchConfig(source) {
+    const response = await fetch(apiURL("/api/config?source=" + encodeURIComponent(source)), { cache: "no-store" });
+    if (response.status === 404) return "Not available on this device.";
+    if (!response.ok) throw new Error("Unable to load " + source + " configuration");
+    return response.text();
+  }
+
+  async function fetchLogs() {
+    const response = await fetch(apiURL("/api/logs?limit=64"), { cache: "no-store" });
+    if (!response.ok) throw new Error("Device logs unavailable");
+    const payload = await response.json();
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    if (!items.length) return "No device logs have been captured during this boot session.";
+    return items.map(item => "[" + formatDuration(item.uptime_ms) + "] " + (item.text || "")).join("\n");
+  }
+
+  async function loadDiagnostics(force) {
+    if (app.diagnosticsLoading || (app.diagnosticsLoaded && !force)) return;
+    app.diagnosticsLoading = true;
+    byId("reloadDiagnostics").disabled = true;
+    ["activeConfig", "spiffsConfig", "sdConfig", "deviceLogs"].forEach(id => { byId(id).textContent = "Loading…"; });
+    const results = await Promise.allSettled([
+      fetchSystem(), fetchConfig("active"), fetchConfig("spiffs"), fetchConfig("sd"), fetchLogs()
+    ]);
+    const targets = [null, "activeConfig", "spiffsConfig", "sdConfig", "deviceLogs"];
+    results.forEach((result, index) => {
+      if (!targets[index]) return;
+      byId(targets[index]).textContent = result.status === "fulfilled" ? result.value : result.reason.message;
+    });
+    if (results.some(result => result.status === "rejected")) {
+      showToast("Some diagnostics could not be loaded.", true);
+    }
+    app.diagnosticsLoaded = true;
+    app.diagnosticsLoading = false;
+    byId("reloadDiagnostics").disabled = false;
   }
 
   function renderState(state) {
@@ -288,6 +399,7 @@
       document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item === tab));
       document.querySelectorAll(".view").forEach(view => view.classList.remove("active"));
       byId(tab.dataset.view + "View").classList.add("active");
+      if (tab.dataset.view === "settings") loadDiagnostics(false);
     });
   });
 
@@ -296,6 +408,7 @@
   });
   byId("refreshButton").addEventListener("click", () => sendRaw("!SYNC:" + partID + "," + codeID));
   byId("reloadHistory").addEventListener("click", () => sendRaw("!HISTORY:64"));
+  byId("reloadDiagnostics").addEventListener("click", () => loadDiagnostics(true));
 
   document.querySelectorAll("[data-emergency]").forEach(button => {
     let taps = 0;
@@ -332,5 +445,11 @@
   setInterval(() => {
     if (app.connected) sendRaw("!PING:00000000");
   }, 15000);
+  setInterval(() => {
+    fetchSystem().catch(() => {});
+  }, 30000);
+  fetchSystem().catch(() => {
+    byId("buildSummary").textContent = "Status unavailable";
+  });
   connect();
 }());

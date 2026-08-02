@@ -42,6 +42,12 @@ button:focus-visible { outline: 3px solid rgba(92, 200, 255, .55); outline-offse
 .connection.online span { background: var(--green); box-shadow: 0 0 12px var(--green); }
 .connection.connecting span { background: var(--amber); box-shadow: 0 0 12px var(--amber); }
 
+.device-summary { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.device-summary div { min-width: 0; padding: 10px 13px; border: 1px solid var(--line); border-radius: 12px; background: rgba(17, 26, 43, .68); }
+.device-summary span, .device-summary b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-summary span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.device-summary b { margin-top: 3px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+
 .tabs { display: flex; gap: 6px; padding: 5px; margin-bottom: 22px; border: 1px solid var(--line); border-radius: 14px; background: rgba(12, 19, 32, .8); width: fit-content; }
 .tab { border: 0; border-radius: 9px; padding: 9px 15px; color: var(--muted); background: transparent; cursor: pointer; font-size: 13px; font-weight: 700; }
 .tab:hover { color: var(--text); }
@@ -130,6 +136,23 @@ button:focus-visible { outline: 3px solid rgba(92, 200, 255, .55); outline-offse
 .key-grid small { min-height: 11px; margin-top: 2px; color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .12em; }
 .keypad-help { margin: 0; padding: 0 25px 25px; color: var(--muted); font-size: 11px; line-height: 1.5; text-align: center; }
 
+.diagnostic-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.diagnostic-card { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
+.diagnostic-card h3 { margin: 0 0 12px; font-size: 14px; }
+.diagnostic-card dl { margin: 0; }
+.diagnostic-card dl div { display: grid; grid-template-columns: minmax(80px, .8fr) minmax(0, 1.2fr); gap: 8px; padding: 7px 0; border-top: 1px solid rgba(255,255,255,.06); }
+.diagnostic-card dl div:first-child { border-top: 0; }
+.diagnostic-card dt { color: var(--muted); font-size: 11px; }
+.diagnostic-card dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; text-align: right; }
+.config-panel { padding-block: 0; }
+.config-panel summary { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; cursor: pointer; font-size: 14px; font-weight: 800; list-style: none; }
+.config-panel summary::-webkit-details-marker { display: none; }
+.config-panel summary::after { content: "+"; color: var(--accent); font-size: 20px; font-weight: 400; }
+.config-panel[open] summary::after { content: "−"; }
+.config-panel summary span, .config-panel summary small { display: block; }
+.config-panel summary small { margin-bottom: 3px; color: var(--muted); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.diagnostic-output { max-height: 480px; margin: 0 0 20px; overflow: auto; padding: 16px; border: 1px solid #21304a; border-radius: 12px; background: #080e19; color: #c5d2e7; font: 11px/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .toast { position: fixed; z-index: 10; left: 50%; bottom: 24px; max-width: calc(100% - 32px); padding: 11px 16px; border: 1px solid var(--line); border-radius: 11px; background: #17243a; color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,.4); font-size: 12px; opacity: 0; pointer-events: none; transform: translate(-50%, 12px); transition: .2s ease; }
 .toast.visible { opacity: 1; transform: translate(-50%, 0); }
 .toast.error { border-color: rgba(255,102,117,.45); color: #ffd7dc; }
@@ -143,11 +166,14 @@ button:focus-visible { outline: 3px solid rgba(92, 200, 255, .55); outline-offse
   .indicator:last-child { grid-column: span 2; }
   .quick-actions { grid-template-columns: repeat(2, 1fr); }
   .panel { padding: 19px; }
+  .diagnostic-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 450px) {
   .tabs { width: 100%; }
-  .tab { flex: 1; padding-inline: 7px; }
+  .tab { flex: 1; padding-inline: 5px; font-size: 11px; }
+  .device-summary { grid-template-columns: 1fr 1fr; }
+  .device-summary div:first-child { grid-column: 1 / -1; }
   .hero { min-height: 210px; align-items: center; }
   .hero h1 { font-size: 37px; }
   .status-glyph { display: none; }

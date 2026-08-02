@@ -43,6 +43,7 @@ static const char *TAG = "AD2UTIL";
 #include "esp_mac.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
+#include "esp_app_desc.h"
 #include <SimpleIni.h>
 // ini config class
 static CSimpleIniA _ad2ini;
@@ -51,6 +52,65 @@ static CSimpleIniA _ad2ini;
 static bool _config_autosave = false;
 static bool _config_dirty = false;
 static bool _uSD_config = false;
+
+const char *ad2_firmware_version()
+{
+    const esp_app_desc_t *app = esp_app_get_description();
+    return app && app->version[0] ? app->version : "Unknown";
+}
+
+/* Bounded, reboot-scoped diagnostic log retained for the read-only Web UI. */
+#define AD2_LOG_HISTORY_SIZE 64
+#define AD2_LOG_LINE_SIZE 192
+struct ad2_log_entry {
+    uint64_t uptime_ms;
+    char text[AD2_LOG_LINE_SIZE];
+};
+static ad2_log_entry _ad2_log_history[AD2_LOG_HISTORY_SIZE];
+static size_t _ad2_log_history_head = 0;
+static size_t _ad2_log_history_count = 0;
+
+static void ad2_capture_log_line(const char *text)
+{
+    if (!text || !text[0]) {
+        return;
+    }
+    taskENTER_CRITICAL(&spinlock);
+    ad2_log_entry &entry = _ad2_log_history[_ad2_log_history_head];
+    entry.uptime_ms = hal_uptime_us() / 1000;
+    strlcpy(entry.text, text, sizeof(entry.text));
+    entry.text[strcspn(entry.text, "\r\n")] = '\0';
+    _ad2_log_history_head = (_ad2_log_history_head + 1) % AD2_LOG_HISTORY_SIZE;
+    if (_ad2_log_history_count < AD2_LOG_HISTORY_SIZE) {
+        _ad2_log_history_count++;
+    }
+    taskEXIT_CRITICAL(&spinlock);
+}
+
+cJSON *ad2_get_recent_logs_json(size_t limit)
+{
+    cJSON *items = cJSON_CreateArray();
+    size_t count;
+    size_t head;
+    taskENTER_CRITICAL(&spinlock);
+    count = _ad2_log_history_count;
+    head = _ad2_log_history_head;
+    taskEXIT_CRITICAL(&spinlock);
+
+    limit = std::min(limit, count);
+    for (size_t offset = 0; offset < limit; offset++) {
+        const size_t index = (head + AD2_LOG_HISTORY_SIZE - 1 - offset) % AD2_LOG_HISTORY_SIZE;
+        ad2_log_entry entry;
+        taskENTER_CRITICAL(&spinlock);
+        entry = _ad2_log_history[index];
+        taskEXIT_CRITICAL(&spinlock);
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddNumberToObject(item, "uptime_ms", (double)entry.uptime_ms);
+        cJSON_AddStringToObject(item, "text", entry.text);
+        cJSON_AddItemToArray(items, item);
+    }
+    return items;
+}
 
 /**
  * @brief  ini file error string helper
@@ -1429,6 +1489,20 @@ void ad2_bypass_zone(int codeId, int partId, uint8_t zone)
     ad2_bypass_zone(code, partId, zone);
 }
 
+bool ad2_get_config_snapshot(std::string &config, bool *using_sd)
+{
+    config.clear();
+    if (using_sd) {
+        *using_sd = _uSD_config;
+    }
+    return _ad2ini.Save(config, false) >= 0;
+}
+
+bool ad2_config_uses_sd()
+{
+    return _uSD_config;
+}
+
 /**
  * @brief Send literal virtual-keypad keys to a configured partition.
  *
@@ -1530,15 +1604,26 @@ int ad2_log_vprintf_host(const char *fmt, va_list args)
     }
 
     // calculate size and make buffer
-    int len = vsnprintf(NULL, 0, fmt, args);
+    va_list args_size;
+    va_copy(args_size, args);
+    int len = vsnprintf(NULL, 0, fmt, args_size);
+    va_end(args_size);
     if (len) {
         char *tbuf = nullptr;
         tbuf = (char *)malloc(len + 1);
-        len = vsnprintf(tbuf, len + 1, fmt, args);
+        if (!tbuf) {
+            ad2_give_host_console((void *)xTaskGetCurrentTaskHandle());
+            return 0;
+        }
+        va_list args_output;
+        va_copy(args_output, args);
+        len = vsnprintf(tbuf, len + 1, fmt, args_output);
+        va_end(args_output);
         if (len) {
             // don't log blank lines or send out \r\n.
             tbuf[strcspn(tbuf, "\r\n")] = 0;
             len = strlen(tbuf);
+            ad2_capture_log_line(tbuf);
             if (!len) {
                 if (!line_clear) {
                     line_clear = false;
@@ -1614,6 +1699,7 @@ void ad2_printf_host(bool prefix, const char *fmt, ...)
     va_start(args, fmt);
     std::string out = ad2_string_vaprintf(fmt, args);
     va_end(args);
+    ad2_capture_log_line(out.c_str());
     cli_write_bytes(out.c_str(), out.length());
     // release the console
     ad2_give_host_console((void *)xTaskGetCurrentTaskHandle());
@@ -1682,7 +1768,7 @@ cJSON *ad2_get_ad2iot_device_info_json()
     // Add this boards info to the object
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
-    cJSON_AddStringToObject(root, "firmware_version", FIRMWARE_VERSION);
+    cJSON_AddStringToObject(root, "firmware_version", ad2_firmware_version());
     cJSON_AddNumberToObject(root, "cpu_model", chip_info.model);
     cJSON_AddNumberToObject(root, "cpu_revision", chip_info.revision);
     cJSON_AddNumberToObject(root, "cpu_cores", chip_info.cores);

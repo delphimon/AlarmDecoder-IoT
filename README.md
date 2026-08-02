@@ -874,6 +874,8 @@ enable = true
 acl = 192.168.0.0/16, 10.10.0.0/16
 ```
 ##  6. <a name='building-firmware'></a>Building firmware
+The firmware version is sourced from `version.txt`. Bump that value for every complete firmware build intended for distribution; ESP-IDF embeds it in the application metadata used by the CLI, update services, integrations, and Web UI.
+
 ###  6.1. <a name='platformio'></a>PlatformIO
 ####  6.1.1. <a name='platformio-setup-notes'></a>Open the project and use the platformio UI inside of vscode to build and flash. Select esp32dev or esp32-poe-iso tree and select Build to compile.
 ###  6.2. <a name='smartthings-device-sdk-build-environment'></a>SmartThings device SDK build environment

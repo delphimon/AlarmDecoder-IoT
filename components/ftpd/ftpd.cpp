@@ -994,7 +994,9 @@ void FTPD::onUpgd(std::istringstream& ss)
  */
 void FTPD::onVers(std::istringstream& ss)
 {
-    sendResponse(RESPONSE_200_COMMAND_OK, "AD2IoT installed version(" FIRMWARE_VERSION  ") build flag (" FIRMWARE_BUILDFLAGS ").\r\n"); // Command okay.
+    std::string response = ad2_string_printf("AD2IoT installed version(%s) build flag (%s).\r\n",
+                           ad2_firmware_version(), FIRMWARE_BUILDFLAGS);
+    sendResponse(RESPONSE_200_COMMAND_OK, response.c_str()); // Command okay.
 }
 
 /**

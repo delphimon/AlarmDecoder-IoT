@@ -1007,7 +1007,7 @@ extern "C" {
         // init host(USB) uart port
         hal_host_uart_init();
         ad2_printf_host(false, "\r\n");
-        ad2_printf_host(true, AD2_SIGNON, TAG, FIRMWARE_VERSION, FIRMWARE_BUILDFLAGS);
+        ad2_printf_host(true, AD2_SIGNON, TAG, ad2_firmware_version(), FIRMWARE_BUILDFLAGS);
 
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
         ESP_ERROR_CHECK(esp_tls_init_global_ca_store());

@@ -33,6 +33,11 @@ static const char *TAG = "WEBUI";
 
 // esp component includes
 #include "esp_http_server.h"
+#include "esp_app_desc.h"
+#include "esp_chip_info.h"
+#include "esp_spiffs.h"
+#include "esp_system.h"
+#include "esp_vfs_fat.h"
 
 // specific includes
 
@@ -52,12 +57,13 @@ static const char *TAG = "WEBUI";
 #define WEBUI_DEFAULT_ACL "0.0.0.0/0"
 #define WEBUI_HISTORY_SIZE 64
 #define WEBUI_WS_MAX_PAYLOAD 256
+#define WEBUI_CONFIG_MAX_BYTES (64 * 1024)
 
 /* Max length a file path can have on storage */
 #define FILE_PATH_MAX (255)
 
-/* helper macro MIN */
-#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+/* Component-scoped helper avoids colliding with FatFS/system headers. */
+#define WEBUI_MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 // Global handle to httpd server
 httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
@@ -172,7 +178,7 @@ static cJSON *webui_history_json(size_t limit, int partition)
         return root;
     }
 
-    size_t wanted = MIN(limit, (size_t)WEBUI_HISTORY_SIZE);
+    size_t wanted = WEBUI_MIN(limit, (size_t)WEBUI_HISTORY_SIZE);
     size_t added = 0;
     for (size_t offset = 0; offset < webui_history_count && added < wanted; offset++) {
         size_t index = (webui_history_head + WEBUI_HISTORY_SIZE - 1 - offset) % WEBUI_HISTORY_SIZE;
@@ -271,11 +277,11 @@ static const char* get_path_from_uri(char *dest, const char *base_path, const ch
 
     const char *quest = strchr(uri, '?');
     if (quest) {
-        pathlen = MIN(pathlen, quest - uri);
+        pathlen = WEBUI_MIN(pathlen, quest - uri);
     }
     const char *hash = strchr(uri, '#');
     if (hash) {
-        pathlen = MIN(pathlen, hash - uri);
+        pathlen = WEBUI_MIN(pathlen, hash - uri);
     }
 
     if (base_pathlen + pathlen + 1 > destsize) {
@@ -516,6 +522,22 @@ static int webui_query_int(httpd_req_t *req, const char *name, int default_value
     return (*end == '\0') ? (int)parsed : default_value;
 }
 
+static bool webui_query_value(httpd_req_t *req, const char *name, std::string &value)
+{
+    size_t query_len = httpd_req_get_url_query_len(req);
+    if (!query_len || query_len > 128) {
+        return false;
+    }
+    char query[129] = { 0 };
+    char result[32] = { 0 };
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+            httpd_query_key_value(query, name, result, sizeof(result)) != ESP_OK) {
+        return false;
+    }
+    value = result;
+    return true;
+}
+
 static esp_err_t webui_send_json_response(httpd_req_t *req, cJSON *root)
 {
     char *json = cJSON_PrintUnformatted(root);
@@ -551,6 +573,260 @@ static esp_err_t webui_history_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Limit must be between 1 and 64");
     }
     return webui_send_json_response(req, webui_history_json((size_t)limit, partition));
+}
+
+static void webui_add_file_status(cJSON *parent, const char *name, const char *path)
+{
+    struct stat info;
+    cJSON *file = cJSON_CreateObject();
+    const bool present = stat(path, &info) == 0 && S_ISREG(info.st_mode);
+    cJSON_AddBoolToObject(file, "present", present);
+    cJSON_AddNumberToObject(file, "size_bytes", present ? (double)info.st_size : 0);
+    cJSON_AddItemToObject(parent, name, file);
+}
+
+/** Build, network, storage, and runtime status: GET /api/system */
+static esp_err_t webui_system_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    const esp_app_desc_t *app = esp_app_get_description();
+    cJSON_AddStringToObject(root, "firmware_version", ad2_firmware_version());
+    cJSON_AddStringToObject(root, "build_flags", FIRMWARE_BUILDFLAGS);
+    cJSON_AddStringToObject(root, "build_date", app ? app->date : "Unknown");
+    cJSON_AddStringToObject(root, "build_time", app ? app->time : "Unknown");
+    cJSON_AddStringToObject(root, "idf_version", app ? app->idf_ver : "Unknown");
+    cJSON_AddNumberToObject(root, "uptime_ms", (double)(hal_uptime_us() / 1000));
+
+    std::string network_args;
+    const char network_mode = ad2_get_network_mode(network_args);
+    const char *network_mode_name = network_mode == 'W' ? "Wireless" :
+                                    network_mode == 'E' ? "Ethernet" : "Disabled";
+    std::string local_ip = "Unavailable";
+    hal_get_socket_local_ip(httpd_req_to_sockfd(req), local_ip);
+    cJSON *network = cJSON_CreateObject();
+    cJSON_AddStringToObject(network, "mode", network_mode_name);
+    cJSON_AddStringToObject(network, "ip_address", local_ip.c_str());
+    cJSON_AddBoolToObject(network, "connected", hal_get_network_connected());
+    cJSON_AddItemToObject(root, "network", network);
+
+    cJSON *storage = cJSON_CreateObject();
+    cJSON *sd = cJSON_CreateObject();
+    cJSON_AddBoolToObject(sd, "mounted", g_uSD_mounted);
+    uint64_t sd_total = 0;
+    uint64_t sd_free = 0;
+    const bool sd_info_ok = g_uSD_mounted &&
+                            esp_vfs_fat_info("/" AD2_USD_MOUNT_POINT, &sd_total, &sd_free) == ESP_OK;
+    cJSON_AddNumberToObject(sd, "total_bytes", sd_info_ok ? (double)sd_total : 0);
+    cJSON_AddNumberToObject(sd, "free_bytes", sd_info_ok ? (double)sd_free : 0);
+    webui_add_file_status(sd, "config", "/" AD2_USD_MOUNT_POINT AD2_CONFIG_FILE);
+    cJSON_AddItemToObject(storage, "sd_card", sd);
+
+    cJSON *spiffs = cJSON_CreateObject();
+    size_t spiffs_total = 0;
+    size_t spiffs_used = 0;
+    const bool spiffs_ok = esp_spiffs_info(AD2_SPIFFS_MOUNT_POINT, &spiffs_total, &spiffs_used) == ESP_OK;
+    cJSON_AddBoolToObject(spiffs, "mounted", spiffs_ok);
+    cJSON_AddNumberToObject(spiffs, "total_bytes", spiffs_ok ? (double)spiffs_total : 0);
+    cJSON_AddNumberToObject(spiffs, "used_bytes", spiffs_ok ? (double)spiffs_used : 0);
+    webui_add_file_status(spiffs, "config", "/" AD2_SPIFFS_MOUNT_POINT AD2_CONFIG_FILE);
+    cJSON_AddItemToObject(storage, "spiffs", spiffs);
+    cJSON_AddStringToObject(storage, "active_config_source", ad2_config_uses_sd() ? "SD card" : "SPIFFS");
+    cJSON_AddItemToObject(root, "storage", storage);
+
+    cJSON *memory = cJSON_CreateObject();
+    cJSON_AddNumberToObject(memory, "free_heap_bytes", esp_get_free_heap_size());
+    cJSON_AddNumberToObject(memory, "minimum_free_heap_bytes", esp_get_minimum_free_heap_size());
+    cJSON_AddItemToObject(root, "memory", memory);
+
+    esp_chip_info_t chip;
+    esp_chip_info(&chip);
+    cJSON *device = cJSON_CreateObject();
+    std::string uuid;
+    ad2_genUUID(0, uuid);
+    cJSON_AddStringToObject(device, "uuid", uuid.c_str());
+    cJSON_AddNumberToObject(device, "cpu_cores", chip.cores);
+    cJSON_AddNumberToObject(device, "cpu_revision", chip.revision);
+    cJSON_AddStringToObject(device, "alarmdecoder_source", g_ad2_mode == 'S' ? "Network socket" :
+                                                        g_ad2_mode == 'C' ? "Serial" : "Unavailable");
+    cJSON_AddItemToObject(root, "device", device);
+
+    return webui_send_json_response(req, root);
+}
+
+static bool webui_sensitive_key(const std::string &section, const std::string &key)
+{
+    if (section == "code") {
+        return true;
+    }
+    static const char *markers[] = {
+        "password", "passwd", "secret", "token", "apikey", "api_key",
+        "userkey", "authkey", "private_key", "credential", "sid"
+    };
+    for (const char *marker : markers) {
+        if (key.find(marker) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void webui_redact_inline_value(std::string &line, const char *name)
+{
+    std::string lowered = line;
+    ad2_lcase(lowered);
+    std::string marker = std::string(name) + "=";
+    size_t search_from = 0;
+    while (true) {
+        const size_t start = lowered.find(marker, search_from);
+        if (start == std::string::npos) {
+            break;
+        }
+        const size_t value_start = start + marker.length();
+        size_t value_end = line.find_first_of("& \t\r\n", value_start);
+        if (value_end == std::string::npos) {
+            value_end = line.length();
+        }
+        line.replace(value_start, value_end - value_start, "[redacted]");
+        lowered = line;
+        ad2_lcase(lowered);
+        search_from = value_start + strlen("[redacted]");
+    }
+}
+
+static std::string webui_redact_config(const std::string &input)
+{
+    std::string output;
+    output.reserve(input.length());
+    std::string section;
+    size_t cursor = 0;
+    while (cursor < input.length()) {
+        size_t end = input.find('\n', cursor);
+        const bool has_newline = end != std::string::npos;
+        if (!has_newline) {
+            end = input.length();
+        }
+        std::string line = input.substr(cursor, end - cursor);
+        std::string parsed = line;
+        ad2_trim(parsed);
+        while (!parsed.empty() && (parsed[0] == '#' || parsed[0] == ';')) {
+            parsed.erase(0, 1);
+            ad2_trim(parsed);
+        }
+        if (parsed.length() > 2 && parsed.front() == '[' && parsed.back() == ']') {
+            section = parsed.substr(1, parsed.length() - 2);
+            ad2_lcase(section);
+            ad2_trim(section);
+        } else {
+            const size_t equals = parsed.find('=');
+            if (equals != std::string::npos) {
+                std::string key = parsed.substr(0, equals);
+                ad2_lcase(key);
+                ad2_trim(key);
+                if (webui_sensitive_key(section, key)) {
+                    const size_t original_equals = line.find('=');
+                    if (original_equals != std::string::npos) {
+                        line.erase(original_equals + 1);
+                        line += " [redacted]";
+                    }
+                }
+            }
+        }
+
+        webui_redact_inline_value(line, "password");
+        webui_redact_inline_value(line, "token");
+        std::string lowered = line;
+        ad2_lcase(lowered);
+        const size_t scheme = lowered.find("://");
+        const size_t at = scheme == std::string::npos ? std::string::npos : line.find('@', scheme + 3);
+        if (at != std::string::npos) {
+            line.replace(scheme + 3, at - (scheme + 3), "[redacted]");
+        }
+        output += line;
+        if (has_newline) {
+            output += '\n';
+        }
+        cursor = end + (has_newline ? 1 : 0);
+    }
+    return output;
+}
+
+static bool webui_read_file(const char *path, std::string &contents)
+{
+    struct stat info;
+    if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) ||
+            info.st_size < 0 || info.st_size > WEBUI_CONFIG_MAX_BYTES) {
+        return false;
+    }
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return false;
+    }
+    contents.clear();
+    contents.reserve((size_t)info.st_size);
+    char chunk[512];
+    size_t count;
+    while ((count = fread(chunk, 1, sizeof(chunk), file)) > 0) {
+        contents.append(chunk, count);
+    }
+    const bool ok = !ferror(file);
+    fclose(file);
+    return ok;
+}
+
+/** Redacted configuration text: GET /api/config?source=active|spiffs|sd */
+static esp_err_t webui_config_handler(httpd_req_t *req)
+{
+    std::string source;
+    if (!webui_query_value(req, "source", source)) {
+        source = "active";
+    }
+    ad2_lcase(source);
+    std::string config;
+    bool ok = false;
+    const char *source_name = nullptr;
+    if (source == "active") {
+        bool using_sd = false;
+        ok = ad2_get_config_snapshot(config, &using_sd);
+        source_name = using_sd ? "SD card (active)" : "SPIFFS (active)";
+    } else if (source == "spiffs") {
+        ok = webui_read_file("/" AD2_SPIFFS_MOUNT_POINT AD2_CONFIG_FILE, config);
+        source_name = "SPIFFS file";
+    } else if (source == "sd") {
+        ok = g_uSD_mounted && webui_read_file("/" AD2_USD_MOUNT_POINT AD2_CONFIG_FILE, config);
+        source_name = "SD card file";
+    } else {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown configuration source");
+    }
+    if (!ok) {
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Configuration is not available");
+    }
+    config = webui_redact_config(config);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "X-Config-Source", source_name);
+    return httpd_resp_send(req, config.c_str(), config.length());
+}
+
+/** Bounded reboot-scoped device log: GET /api/logs?limit=64 */
+static esp_err_t webui_logs_handler(httpd_req_t *req)
+{
+    int limit = webui_query_int(req, "limit", 64);
+    if (limit < 1 || limit > 64) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Limit must be between 1 and 64");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "uptime_ms", (double)(hal_uptime_us() / 1000));
+    cJSON *items = ad2_get_recent_logs_json((size_t)limit);
+    cJSON *item = nullptr;
+    cJSON_ArrayForEach(item, items) {
+        cJSON *text = cJSON_GetObjectItem(item, "text");
+        if (cJSON_IsString(text) && text->valuestring) {
+            const std::string redacted = webui_redact_config(text->valuestring);
+            cJSON_SetValuestring(text, redacted.c_str());
+        }
+    }
+    cJSON_AddItemToObject(root, "items", items);
+    return webui_send_json_response(req, root);
 }
 
 /**
@@ -856,6 +1132,39 @@ void webui_server_task(void *pvParameters)
         .supported_subprotocol = nullptr
 #endif
     };
+    httpd_uri_t system_api = {
+        .uri       = "/api/system",
+        .method    = HTTP_GET,
+        .handler   = webui_system_handler,
+        .user_ctx  = NULL,
+#if CONFIG_HTTPD_WS_SUPPORT
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr
+#endif
+    };
+    httpd_uri_t config_api = {
+        .uri       = "/api/config",
+        .method    = HTTP_GET,
+        .handler   = webui_config_handler,
+        .user_ctx  = NULL,
+#if CONFIG_HTTPD_WS_SUPPORT
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr
+#endif
+    };
+    httpd_uri_t logs_api = {
+        .uri       = "/api/logs",
+        .method    = HTTP_GET,
+        .handler   = webui_logs_handler,
+        .user_ctx  = NULL,
+#if CONFIG_HTTPD_WS_SUPPORT
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr
+#endif
+    };
     httpd_uri_t file_server = {
         .uri       = "/*",
         .method    = HTTP_GET,
@@ -879,6 +1188,9 @@ void webui_server_task(void *pvParameters)
 #endif
                 httpd_register_uri_handler(server, &state_api);
                 httpd_register_uri_handler(server, &history_api);
+                httpd_register_uri_handler(server, &system_api);
+                httpd_register_uri_handler(server, &config_api);
+                httpd_register_uri_handler(server, &logs_api);
                 httpd_register_uri_handler(server, &file_server);
             } else {
                 // error long 10s sleep.

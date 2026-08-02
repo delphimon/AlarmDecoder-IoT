@@ -224,7 +224,7 @@ void mqtt_send_partition_config(AD2PartitionState *s)
             { "payload_arm_home", "ARM_STAY"},
             { "payload_trigger", "PANIC_ALARM"},
             { "icon", "mdi:shield-home"},
-            { "sw_version", FIRMWARE_VERSION}
+            { "sw_version", ad2_firmware_version()}
         }
     });
 
@@ -277,7 +277,7 @@ void mqtt_send_fw_version(const char *available_version)
         sTopic+="/fw_version";
 
         cJSON *root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "installed", FIRMWARE_VERSION);
+        cJSON_AddStringToObject(root, "installed", ad2_firmware_version());
         cJSON_AddStringToObject(root, "available", available_version);
 
         char *state = cJSON_Print(root);
@@ -402,7 +402,7 @@ void mqtt_on_connect(esp_mqtt_client_handle_t client)
     mqtt_on_ad2cfg(nullptr, nullptr, nullptr);
 
     // set available version to current for now. Will be updated if new version available.
-    mqtt_send_fw_version(FIRMWARE_VERSION);
+    mqtt_send_fw_version(ad2_firmware_version());
 
     // Send firmware_update config
     topic = mqttclient_TPREFIX + MQTT_TOPIC_PREFIX "/";

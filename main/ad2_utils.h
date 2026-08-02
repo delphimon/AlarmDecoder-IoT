@@ -53,6 +53,8 @@ AD2PartitionState *ad2_get_partition_state(int partId);
 cJSON *ad2_get_ad2iot_device_info_json();
 cJSON *ad2_get_partition_state_json(AD2PartitionState *);
 cJSON *ad2_get_partition_zone_alerts_json(AD2PartitionState *);
+cJSON *ad2_get_recent_logs_json(size_t limit);
+const char *ad2_firmware_version();
 int ad2_log_vprintf_host(const char *fmt, va_list args);
 void ad2_printf_host(bool prefix, const char *format, ...);
 void ad2_snprintf_host(const char *fmt, size_t size, ...);
@@ -179,6 +181,8 @@ void ad2_set_config_key_string(
 // persistent configuration load/save
 void ad2_load_persistent_config();
 void ad2_save_persistent_config();
+bool ad2_get_config_snapshot(std::string &config, bool *using_sd = nullptr);
+bool ad2_config_uses_sd();
 
 // ASYNC serialized http request api for components.
 

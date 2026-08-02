@@ -248,7 +248,8 @@ void usdupdate_init()
  */
 void usd_do_version(const char *arg)
 {
-    ad2_printf_host(false, "Installed version(" FIRMWARE_VERSION  ") build flag (" FIRMWARE_BUILDFLAGS ").\r\n");
+    ad2_printf_host(false, "Installed version(%s) build flag (%s).\r\n",
+                    ad2_firmware_version(), FIRMWARE_BUILDFLAGS);
 }
 
 #endif /* CONFIG_AD2IOT_USDUPDATE */

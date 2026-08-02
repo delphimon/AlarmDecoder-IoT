@@ -189,7 +189,7 @@ esp_err_t ota_api_get_available_version(char *update_info, unsigned int update_i
 
     for (int i = 0 ; i < cJSON_GetArraySize(array) ; i++) {
         char *upgrade = cJSON_GetArrayItem(array, i)->valuestring;
-        if (strcmp(upgrade, FIRMWARE_VERSION) == 0) {
+        if (strcmp(upgrade, ad2_firmware_version()) == 0) {
             is_new_version = true;
             break;
         }
@@ -727,7 +727,8 @@ static void ota_polling_task_func(void *arg)
 
         vTaskDelay(delay / portTICK_PERIOD_MS);
 
-        ESP_LOGI(TAG, "Starting check new version with current version '%s'-%s", FIRMWARE_VERSION, FIRMWARE_BUILDFLAGS);
+        ESP_LOGI(TAG, "Starting check new version with current version '%s'-%s",
+                 ad2_firmware_version(), FIRMWARE_BUILDFLAGS);
 
         if (ota_task_handle != NULL) {
             ESP_LOGI(TAG, "Device is currently updating skipping checks for now.");
@@ -772,7 +773,7 @@ static void ota_polling_task_func(void *arg)
                 free(available_version);
             } else {
                 // if nothing available then it must be the same we have installed.
-                ota_available_version = FIRMWARE_VERSION;
+                ota_available_version = ad2_firmware_version();
                 ESP_LOGI(TAG, "Get available version found NO available version on the server.");
             }
         }
@@ -843,6 +844,7 @@ void ota_init()
  */
 void ota_do_version(const char *arg)
 {
-    ad2_printf_host(false, "Installed version(" FIRMWARE_VERSION  ") build flag (" FIRMWARE_BUILDFLAGS ") available version(%s).\r\n", ota_available_version.c_str());
+    ad2_printf_host(false, "Installed version(%s) build flag (%s) available version(%s).\r\n",
+                    ad2_firmware_version(), FIRMWARE_BUILDFLAGS, ota_available_version.c_str());
 }
 #endif /* CONFIG_AD2IOT_OTAUPDATE */

@@ -7,7 +7,7 @@ Copy the contents of flash-drive folder into the root directory of a uSD flash d
 
 To access the web interface connect to the IP address or host name of the ESP32-POE-ISO board that is configured with the 'webui' build of the AD2IoT firmware.
 
-The dashboard provides live partition state, keypad display text, power/battery/chime/bypass indicators, active zones, quick arm/disarm controls, emergency controls, a reboot-scoped 64-event activity log, and a full `0-9`, `*`, `#` virtual keypad. Emergency controls retain the three-tap safeguard. The web assets have no internet dependencies.
+The dashboard provides live partition state, keypad display text, power/battery/chime/bypass indicators, active zones, quick arm/disarm controls, emergency controls, a reboot-scoped 64-event activity log, and a full `0-9`, `*`, `#` virtual keypad. The header shows the firmware version/build date, connection mode, and device IP. A read-only Settings pane shows runtime health, SD/SPIFFS state, the active configuration, both stored `ad2iot.ini` files, and recent device logs. Credential values and alarm codes are redacted on the device. Emergency controls retain the three-tap safeguard. The web assets have no internet dependencies.
 ## Arguments
 - codeID : The codeid slot to use on the AD2IoT for arming etc.
 - partID : The partition slot to use for this virtual keypad. If partition is configured for address 18 then this virtual keypad will show that keypads partition state.
@@ -23,6 +23,9 @@ The dashboard provides live partition state, keypad display text, power/battery/
 - `GET /api/state?partition=0` returns the current state for a configured partition slot.
 - `GET /api/history?limit=64` returns newest-first activity from the current boot session.
 - `GET /api/history?limit=20&partition=1` optionally filters activity by the panel partition number.
+- `GET /api/system` returns build, network, storage, memory, and device details.
+- `GET /api/config?source=active|spiffs|sd` returns a redacted configuration snapshot as plain text.
+- `GET /api/logs?limit=64` returns newest-first device logs from the current boot session.
 
 Responses are JSON and use `Cache-Control: no-store`. The same webUI IP/CIDR ACL applies to the API and WebSocket endpoint.
 
