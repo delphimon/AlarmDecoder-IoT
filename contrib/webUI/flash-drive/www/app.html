@@ -80,7 +80,7 @@
             <div><p class="eyebrow">This boot session</p><h2>Recent activity</h2></div>
             <button id="reloadHistory" class="text-button">Reload</button>
           </div>
-          <p class="section-note">The device retains the latest 64 events until it restarts.</p>
+          <p class="section-note">The device retains the latest 64 events until it restarts. Exact times use this browser's local clock.</p>
           <ol id="activityList" class="activity-list"><li class="empty-state">No activity recorded yet.</li></ol>
         </section>
       </section>
@@ -125,6 +125,7 @@
                 <div><dt>Mode</dt><dd id="diagNetworkMode">—</dd></div>
                 <div><dt>Address</dt><dd id="diagIp">—</dd></div>
                 <div><dt>Web access</dt><dd id="diagWebProtocol">—</dd></div>
+                <div><dt>TLS sessions</dt><dd id="diagTlsSessions">—</dd></div>
                 <div><dt>State</dt><dd id="diagNetworkState">—</dd></div>
                 <div><dt>AD2 source</dt><dd id="diagAd2Source">—</dd></div>
                 <div><dt>UUID</dt><dd id="diagUuid">—</dd></div>
@@ -135,11 +136,32 @@
               <dl>
                 <div><dt>Active config</dt><dd id="diagConfigSource">—</dd></div>
                 <div><dt>SD card</dt><dd id="diagSd">—</dd></div>
+                <div><dt>SD logging</dt><dd id="diagSdLogging">—</dd></div>
                 <div><dt>SPIFFS</dt><dd id="diagSpiffs">—</dd></div>
                 <div><dt>Free heap</dt><dd id="diagHeap">—</dd></div>
                 <div><dt>Lowest heap</dt><dd id="diagMinHeap">—</dd></div>
+                <div><dt>Largest block</dt><dd id="diagLargestHeap">—</dd></div>
+                <div><dt>Last reset</dt><dd id="diagResetReason">—</dd></div>
               </dl>
             </article>
+          </div>
+        </section>
+
+        <section class="panel maintenance-panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">Maintenance</p><h2>SD firmware and device control</h2></div>
+            <button id="refreshFirmware" class="text-button">Check SD card</button>
+          </div>
+          <div class="firmware-status-grid">
+            <div><span>Status</span><b id="sdFirmwareStatus">Not checked</b></div>
+            <div><span>Version</span><b id="sdFirmwareVersion">—</b></div>
+            <div><span>Built</span><b id="sdFirmwareBuild">—</b></div>
+            <div><span>Image size</span><b id="sdFirmwareSize">—</b></div>
+          </div>
+          <p id="sdFirmwareDetail" class="section-note maintenance-note">Place firmware.bin in the root of the mounted SD card.</p>
+          <div class="maintenance-actions">
+            <button id="installFirmware" class="action primary" disabled><span>⇧</span>Install SD firmware</button>
+            <button id="restartDevice" class="action danger"><span>↻</span>Restart device</button>
           </div>
         </section>
 

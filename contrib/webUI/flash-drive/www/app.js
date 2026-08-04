@@ -21,8 +21,10 @@
     state: null,
     history: [],
     system: null,
+    firmware: null,
     diagnosticsLoaded: false,
     diagnosticsLoading: false,
+    requestQueue: Promise.resolve(),
     serverUptime: 0,
     keypadMask: "",
     keypadClearTimer: null,
@@ -69,8 +71,18 @@
 
   function apiURL(path) {
     if (!wsHost) return path;
-    const base = /^wss?:\/\//i.test(wsHost) ? wsHost.replace(/^ws/i, "http") : "http://" + wsHost;
+    const base = /^wss?:\/\//i.test(wsHost) ? wsHost.replace(/^ws/i, "http") :
+      (window.location.protocol === "https:" ? "https://" : "http://") + wsHost;
     return base.replace(/\/$/, "") + path;
+  }
+
+  // HTTPS is deliberately limited to two TLS sessions: one WebSocket and one
+  // HTTP request. Keep the complete request, including body consumption, in a
+  // single queue so browsers cannot open competing REST connections.
+  function queueRequest(operation) {
+    const request = app.requestQueue.then(operation, operation);
+    app.requestQueue = request.then(() => undefined, () => undefined);
+    return request;
   }
 
   function formatBytes(value) {
@@ -123,38 +135,92 @@
     byId("diagNetworkMode").textContent = network.mode || "—";
     byId("diagIp").textContent = network.ip_address || "—";
     byId("diagWebProtocol").textContent = network.web_protocol ? network.web_protocol + " · port " + network.web_port : "—";
+    byId("diagTlsSessions").textContent = network.web_protocol === "HTTPS" ?
+      String(device.tls_sessions || 0) + " / " + String(device.tls_session_limit || 0) : "Not active";
     byId("diagNetworkState").textContent = network.connected ? "Connected" : "Disconnected";
     byId("diagAd2Source").textContent = device.alarmdecoder_source || "—";
     byId("diagUuid").textContent = device.uuid || "—";
     byId("diagConfigSource").textContent = storage.active_config_source || "—";
     byId("diagSd").textContent = sd.mounted ? "Mounted · " + formatBytes(sd.free_bytes) + " free / " + formatBytes(sd.total_bytes) : "Not installed";
+    byId("diagSdLogging").textContent = sd.logging_active ?
+      "Active · " + String(sd.logging_dropped || 0) + " dropped · " + String(sd.logging_write_errors || 0) + " errors" :
+      (sd.logging_enabled ? "Configured, unavailable" : "Disabled");
     byId("diagSpiffs").textContent = spiffs.mounted ? formatBytes(spiffs.used_bytes) + " used / " + formatBytes(spiffs.total_bytes) : "Unavailable";
     byId("diagHeap").textContent = formatBytes(memory.free_heap_bytes);
     byId("diagMinHeap").textContent = formatBytes(memory.minimum_free_heap_bytes);
+    byId("diagLargestHeap").textContent = formatBytes(memory.largest_free_block_bytes);
+    byId("diagResetReason").textContent = device.last_reset_reason || "—";
   }
 
   async function fetchSystem() {
-    const response = await fetch(apiURL("/api/system"), { cache: "no-store" });
-    if (!response.ok) throw new Error("System status unavailable");
-    const system = await response.json();
-    renderSystem(system);
-    return system;
+    return queueRequest(async () => {
+      const response = await fetch(apiURL("/api/system"), { cache: "no-store" });
+      if (!response.ok) throw new Error("System status unavailable");
+      const system = await response.json();
+      renderSystem(system);
+      return system;
+    });
   }
 
   async function fetchConfig(source) {
-    const response = await fetch(apiURL("/api/config?source=" + encodeURIComponent(source)), { cache: "no-store" });
-    if (response.status === 404) return "Not available on this device.";
-    if (!response.ok) throw new Error("Unable to load " + source + " configuration");
-    return response.text();
+    return queueRequest(async () => {
+      const response = await fetch(apiURL("/api/config?source=" + encodeURIComponent(source)), { cache: "no-store" });
+      if (response.status === 404) return "Not available on this device.";
+      if (!response.ok) throw new Error("Unable to load " + source + " configuration");
+      return response.text();
+    });
   }
 
   async function fetchLogs() {
-    const response = await fetch(apiURL("/api/logs?limit=64"), { cache: "no-store" });
-    if (!response.ok) throw new Error("Device logs unavailable");
-    const payload = await response.json();
-    const items = Array.isArray(payload.items) ? payload.items : [];
-    if (!items.length) return "No device logs have been captured during this boot session.";
-    return items.map(item => "[" + formatDuration(item.uptime_ms) + "] " + (item.text || "")).join("\n");
+    return queueRequest(async () => {
+      const response = await fetch(apiURL("/api/logs?limit=64"), { cache: "no-store" });
+      if (!response.ok) throw new Error("Device logs unavailable");
+      const payload = await response.json();
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      if (!items.length) return "No device logs have been captured during this boot session.";
+      return items.map(item => "[" + formatDuration(item.uptime_ms) + "] " + (item.text || "")).join("\n");
+    });
+  }
+
+  function renderFirmware(firmware) {
+    app.firmware = firmware;
+    const install = byId("installFirmware");
+    let status = "Unavailable";
+    let detail = firmware.error || "No firmware status was returned.";
+    if (!firmware.supported) {
+      status = "Not supported";
+    } else if (!firmware.sd_mounted) {
+      status = "SD card not mounted";
+    } else if (!firmware.present) {
+      status = "No firmware.bin";
+    } else if (!firmware.valid) {
+      status = "Invalid image";
+    } else if (firmware.update_in_progress) {
+      status = "Installation in progress";
+      detail = "The device will restart after the image passes final OTA validation.";
+    } else if (firmware.upgrade_available) {
+      status = "Upgrade available";
+      detail = "The image passed its ESP32 target, project, checksum, and SHA-256 checks.";
+    } else {
+      status = "Valid image · same version";
+      detail = "This image can be reinstalled, but its version matches the running firmware.";
+    }
+    byId("sdFirmwareStatus").textContent = status;
+    byId("sdFirmwareVersion").textContent = firmware.version || "—";
+    byId("sdFirmwareBuild").textContent = [firmware.build_date, firmware.build_time].filter(Boolean).join(" ") || "—";
+    byId("sdFirmwareSize").textContent = firmware.present ? formatBytes(firmware.size_bytes) : "—";
+    byId("sdFirmwareDetail").textContent = detail;
+    install.disabled = !firmware.valid || firmware.update_in_progress;
+  }
+
+  async function fetchFirmware() {
+    return queueRequest(async () => {
+      const response = await fetch(apiURL("/api/firmware"), { cache: "no-store" });
+      if (!response.ok) throw new Error("SD firmware status unavailable");
+      const firmware = await response.json();
+      renderFirmware(firmware);
+      return firmware;
+    });
   }
 
   async function loadDiagnostics(force) {
@@ -163,9 +229,9 @@
     byId("reloadDiagnostics").disabled = true;
     ["activeConfig", "spiffsConfig", "sdConfig", "deviceLogs"].forEach(id => { byId(id).textContent = "Loading…"; });
     const results = await Promise.allSettled([
-      fetchSystem(), fetchConfig("active"), fetchConfig("spiffs"), fetchConfig("sd"), fetchLogs()
+      fetchSystem(), fetchConfig("active"), fetchConfig("spiffs"), fetchConfig("sd"), fetchLogs(), fetchFirmware()
     ]);
-    const targets = [null, "activeConfig", "spiffsConfig", "sdConfig", "deviceLogs"];
+    const targets = [null, "activeConfig", "spiffsConfig", "sdConfig", "deviceLogs", null];
     results.forEach((result, index) => {
       if (!targets[index]) return;
       byId(targets[index]).textContent = result.status === "fulfilled" ? result.value : result.reason.message;
@@ -180,7 +246,7 @@
 
   function renderState(state) {
     app.state = state;
-    app.serverUptime = Number(state.uptime_ms) || app.serverUptime;
+    app.serverUptime = Math.max(app.serverUptime, Number(state.uptime_ms) || 0);
     const mode = modeFor(state);
     const details = modeDetails(mode);
     const hero = byId("hero");
@@ -262,6 +328,19 @@
     return Math.floor(seconds / 86400) + "d ago";
   }
 
+  function exactEventTime(uptime) {
+    const age = Math.max(0, app.serverUptime - Number(uptime || 0));
+    const date = new Date(Date.now() - age);
+    return {
+      date,
+      label: date.toLocaleString([], {
+        year: "numeric", month: "short", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+        timeZoneName: "short"
+      })
+    };
+  }
+
   function renderHistory() {
     const list = byId("activityList");
     list.textContent = "";
@@ -289,10 +368,16 @@
       body.append(title, detail);
       const meta = document.createElement("div");
       meta.className = "activity-meta";
-      meta.textContent = relativeTime(entry.uptime_ms);
+      const relative = document.createElement("b");
+      relative.textContent = relativeTime(entry.uptime_ms);
+      const exact = document.createElement("time");
+      const timestamp = exactEventTime(entry.uptime_ms);
+      exact.dateTime = timestamp.date.toISOString();
+      exact.textContent = timestamp.label;
+      exact.title = timestamp.date.toISOString();
       const partition = document.createElement("span");
       partition.textContent = "Partition " + (entry.partition || partID);
-      meta.appendChild(partition);
+      meta.append(relative, exact, partition);
       item.append(dot, body, meta);
       list.appendChild(item);
     });
@@ -314,7 +399,8 @@
   function wsURL() {
     if (wsHost) {
       if (/^wss?:\/\//i.test(wsHost)) return wsHost.replace(/\/$/, "") + "/ad2ws";
-      return "ws://" + wsHost.replace(/\/$/, "") + "/ad2ws";
+      return (window.location.protocol === "https:" ? "wss://" : "ws://") +
+        wsHost.replace(/\/$/, "") + "/ad2ws";
     }
     return (window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + "/ad2ws";
   }
@@ -397,6 +483,45 @@
     }
   }
 
+  async function maintenanceAction(action) {
+    const isUpgrade = action === "upgradeusd";
+    const confirmed = window.confirm(isUpgrade ?
+      "Install the validated SD-card firmware? The device will restart automatically if installation succeeds." :
+      "Restart the AlarmDecoder device now?");
+    if (!confirmed) return;
+    const installButton = byId("installFirmware");
+    const restartButton = byId("restartDevice");
+    installButton.disabled = true;
+    restartButton.disabled = true;
+    try {
+      const result = await queueRequest(async () => {
+        const response = await fetch(apiURL("/api/action"), {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+            "X-AD2IoT-Action": action
+          },
+          body: JSON.stringify({ action })
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Maintenance action was rejected");
+        }
+        return response.json();
+      });
+      showToast(result.message || "Maintenance action accepted");
+      if (isUpgrade) {
+        byId("sdFirmwareStatus").textContent = "Installation starting";
+        byId("sdFirmwareDetail").textContent = "The device will restart after final OTA validation.";
+      }
+    } catch (error) {
+      showToast(error.message, true);
+      restartButton.disabled = false;
+      installButton.disabled = !(app.firmware && app.firmware.valid);
+    }
+  }
+
   document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item === tab));
@@ -412,6 +537,14 @@
   byId("refreshButton").addEventListener("click", () => sendRaw("!SYNC:" + partID + "," + codeID));
   byId("reloadHistory").addEventListener("click", () => sendRaw("!HISTORY:64"));
   byId("reloadDiagnostics").addEventListener("click", () => loadDiagnostics(true));
+  byId("refreshFirmware").addEventListener("click", () => {
+    byId("refreshFirmware").disabled = true;
+    fetchFirmware().catch(error => showToast(error.message, true)).finally(() => {
+      byId("refreshFirmware").disabled = false;
+    });
+  });
+  byId("installFirmware").addEventListener("click", () => maintenanceAction("upgradeusd"));
+  byId("restartDevice").addEventListener("click", () => maintenanceAction("restart"));
 
   document.querySelectorAll("[data-emergency]").forEach(button => {
     let taps = 0;
@@ -453,6 +586,5 @@
   }, 30000);
   fetchSystem().catch(() => {
     byId("buildSummary").textContent = "Status unavailable";
-  });
-  connect();
+  }).finally(connect);
 }());

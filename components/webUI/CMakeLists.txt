@@ -8,5 +8,6 @@ idf_component_register(SRCS "webUI.cpp" "TinyTemplateEngine.cpp" "TinyTemplateEn
                     REQUIRES idf::esp_app_format
                     REQUIRES idf::fatfs
                     REQUIRES idf::spiffs
+                    REQUIRES idf::usdupdate
                     INCLUDE_DIRS . ../../main/)
 project(webUI)

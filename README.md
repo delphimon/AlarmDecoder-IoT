@@ -116,6 +116,10 @@ restart
 
 After restart, connect with a TCP terminal such as `nc <device-ip> 2323`, Windows Telnet, or PuTTY in Raw mode, enter the password, and use the normal commands. Run `exit` or `quit` to close the connection. Only one network CLI session is served at a time. The protocol is plain TCP, so use it only on a trusted private network or through a VPN; the ACL does not encrypt the password or command traffic.
 
+Use `logs` (or `logs 20`) from either USB serial or the network CLI to display the bounded, reboot-scoped log history with uptime timestamps. `logs status` reports persistent-log health. To retain logs across a restart when a uSD card is mounted, run `logs sd Y`, then `restart` to save the setting. The asynchronous writer uses `/sdcard/ad2iot.log` and rotates it at 512 KiB to `/sdcard/ad2iot.log.1`; disable it with `logs sd N`.
+
+Network CLI diagnostics have important limits: the TCP session depends on the same network stack being debugged, cannot show ROM/bootloader output or panic text after the socket fails, and does not provide a continuous unsolicited live stream. Its 64-line RAM history is lost at reboot and uses uptime rather than wall-clock timestamps. USB serial remains the most reliable source for early boot, watchdog, panic, and network-failure output. Persistent uSD logging catches ordinary application logs after the card and configuration are initialized, but early boot is missed, the final queued lines can be lost on sudden power failure, heavy debug logging can increase card wear/I/O contention, and queue overflow or write failures are reported by `logs status`.
+
 ##  5. <a name='ad2iot-cli---command-line-interface'></a>AD2Iot CLI - command line interface
 - Configure the initial AD2IoT device settings.
   - Select TTL GPIO pins or socket address and port for the AlarmDecoder protocol stream using ```one``` of the following commands.
@@ -258,11 +262,12 @@ Usage: upgradeusd
 ```console
 Usage: versionusd
 
-    Report the current firmware version and build flag
+    Report installed firmware and validate /sdcard/firmware.bin
 ```
 ```console
 AD2IOT # versionusd
-Installed version(AD2IOT-1104) build flag (webui).
+Installed version(AD2IOT-1108) build flag (webui).
+SD firmware is valid: version(AD2IOT-1109), project(alarmdecoder_ad2iot_esp32), built(Aug 04 2026 12:34:56), size(1531088 bytes) [available for upgrade].
 ```
 - netmode
 ```console
@@ -531,7 +536,7 @@ acl = 192.168.0.0/16, 10.10.0.0/16
 ```
 
 ###  5.3. <a name='web-user-interface-webui-component'></a>Web User Interface webUI component
-This component provides a responsive HTML5+WebSocket dashboard with real-time alarm and keypad display state, system health indicators, active-zone details, quick controls, a 64-event activity history for the current boot session, and a full virtual keypad. It also exposes read-only JSON state and history endpoints under `/api`. Panic buttons require pressing the button three times within 3 seconds to help prevent false alarms.<br>
+This component provides a responsive HTML5+WebSocket dashboard with real-time alarm and keypad display state, system health indicators, active-zone details, quick controls, a 64-event activity history with relative and exact client-local timestamps, and a full virtual keypad. Settings includes SD firmware validation plus confirmed install/restart actions. Panic buttons require pressing the button three times within 3 seconds to help prevent false alarms.<br>
 <img src="contrib/webUI/EXAMPLE-PANEL-READY.jpg" width="200">
 
 ####  5.3.1. <a name='configuration-for-webui-server'></a>Configuration tool for webUI server
@@ -563,7 +568,7 @@ ssl = true
 sslcert = certs/fullchain.pem
 sslkey = certs/privkey.pem
 ```
-HTTPS is opt-in and listens on port 443. Copy the PEM certificate chain and unencrypted private key onto the SD card at `/certs/fullchain.pem` and `/certs/privkey.pem`, or configure different paths beneath `/sdcard`. The standard Let's Encrypt `fullchain.pem` and `privkey.pem` files are supported. FAT32 does not preserve Certbot symlinks, so copy the target file contents. Restart the AD2IoT after enabling HTTPS or replacing renewed certificates. If HTTPS is enabled but either PEM file is unavailable or invalid, the Web UI fails closed instead of falling back to HTTP.
+HTTPS is opt-in and listens on port 443. Copy the PEM certificate chain and unencrypted private key onto the SD card at `/certs/fullchain.pem` and `/certs/privkey.pem`, or configure different paths beneath `/sdcard`. The standard Let's Encrypt `fullchain.pem` and `privkey.pem` files are supported. FAT32 does not preserve Certbot symlinks, so copy the target file contents. Restart the AD2IoT after enabling HTTPS or replacing renewed certificates. If HTTPS is enabled but either PEM file is unavailable or invalid, the Web UI fails closed instead of falling back to HTTP. HTTPS is limited to two simultaneous client sockets because each ESP-IDF TLS socket can consume roughly 40 KiB. The browser reserves one for WSS and serializes all REST operations through the other. Settings reports the last reset cause, current/minimum heap, largest free block, and TLS session count; the serial log also records heap values when TLS sessions open and close.
 
 ###  5.4. <a name='smartthings-direct-connected-device.'></a>SmartThings Direct Connected device.
 ###### ```Only available in stsdk firmware build```

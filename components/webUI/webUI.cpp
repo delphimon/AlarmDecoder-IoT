@@ -39,6 +39,8 @@ static const char *TAG = "WEBUI";
 #include "esp_spiffs.h"
 #include "esp_system.h"
 #include "esp_vfs_fat.h"
+#include "esp_heap_caps.h"
+#include "usdupdate.h"
 
 // specific includes
 
@@ -46,6 +48,7 @@ static const char *TAG = "WEBUI";
 //#define DEBUG_WEBUI
 #define PORT 10000
 #define MAX_CLIENTS 4
+#define WEBUI_TLS_MAX_CLIENTS 2
 #define MAX_FIFO_BUFFERS 30
 #define MAXCONNECTIONS MAX_CLIENTS+1
 #define WEBUI_DOC_ROOT         "/www"
@@ -78,6 +81,8 @@ static bool webui_tls_enabled = false;
 static bool webui_server_uses_tls = false;
 static std::string webui_tls_cert_setting = WEBUI_DEFAULT_SSL_CERT;
 static std::string webui_tls_key_setting = WEBUI_DEFAULT_SSL_KEY;
+static unsigned webui_tls_sessions = 0;
+static size_t webui_tls_start_free_heap = 0;
 
 /* ACL control */
 ad2_acl_check webui_acl;
@@ -584,6 +589,42 @@ static esp_err_t webui_send_json_response(httpd_req_t *req, cJSON *root)
     return result;
 }
 
+static const char *webui_reset_reason_name(esp_reset_reason_t reason)
+{
+    switch (reason) {
+    case ESP_RST_POWERON: return "Power-on reset";
+    case ESP_RST_EXT: return "External reset";
+    case ESP_RST_SW: return "Software restart";
+    case ESP_RST_PANIC: return "Software panic";
+    case ESP_RST_INT_WDT: return "Interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "Task watchdog";
+    case ESP_RST_WDT: return "Other watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep-sleep wake";
+    case ESP_RST_BROWNOUT: return "Brownout";
+    case ESP_RST_SDIO: return "SDIO reset";
+    case ESP_RST_UNKNOWN:
+    default: return "Unknown";
+    }
+}
+
+static void webui_tls_session_callback(esp_https_server_user_cb_arg_t *arg)
+{
+    if (!arg) {
+        return;
+    }
+    if (arg->user_cb_state == HTTPD_SSL_USER_CB_SESS_CREATE) {
+        webui_tls_sessions++;
+    } else if (arg->user_cb_state == HTTPD_SSL_USER_CB_SESS_CLOSE && webui_tls_sessions > 0) {
+        webui_tls_sessions--;
+    }
+    ESP_LOGI(TAG, "TLS session %s (%u/%u): heap=%u, minimum=%u, largest=%u",
+             arg->user_cb_state == HTTPD_SSL_USER_CB_SESS_CREATE ? "opened" : "closed",
+             webui_tls_sessions, WEBUI_TLS_MAX_CLIENTS,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
+
 /** Read-only current state API: GET /api/state?partition=0 */
 static esp_err_t webui_state_handler(httpd_req_t *req)
 {
@@ -661,6 +702,18 @@ static esp_err_t webui_system_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(sd, "total_bytes", sd_info_ok ? (double)sd_total : 0);
     cJSON_AddNumberToObject(sd, "free_bytes", sd_info_ok ? (double)sd_free : 0);
     webui_add_file_status(sd, "config", "/" AD2_USD_MOUNT_POINT AD2_CONFIG_FILE);
+    webui_add_file_status(sd, "diagnostic_log", AD2_SD_LOG_PATH);
+    webui_add_file_status(sd, "diagnostic_log_rotated", AD2_SD_LOG_OLD_PATH);
+    bool sd_log_enabled = false;
+    bool sd_log_active = false;
+    uint32_t sd_log_dropped = 0;
+    uint32_t sd_log_write_errors = 0;
+    ad2_get_sd_logging_status(&sd_log_enabled, &sd_log_active,
+                              &sd_log_dropped, &sd_log_write_errors);
+    cJSON_AddBoolToObject(sd, "logging_enabled", sd_log_enabled);
+    cJSON_AddBoolToObject(sd, "logging_active", sd_log_active);
+    cJSON_AddNumberToObject(sd, "logging_dropped", sd_log_dropped);
+    cJSON_AddNumberToObject(sd, "logging_write_errors", sd_log_write_errors);
     cJSON_AddItemToObject(storage, "sd_card", sd);
 
     cJSON *spiffs = cJSON_CreateObject();
@@ -678,6 +731,11 @@ static esp_err_t webui_system_handler(httpd_req_t *req)
     cJSON *memory = cJSON_CreateObject();
     cJSON_AddNumberToObject(memory, "free_heap_bytes", esp_get_free_heap_size());
     cJSON_AddNumberToObject(memory, "minimum_free_heap_bytes", esp_get_minimum_free_heap_size());
+    cJSON_AddNumberToObject(memory, "largest_free_block_bytes",
+                            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    cJSON_AddNumberToObject(memory, "internal_free_heap_bytes",
+                            heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    cJSON_AddNumberToObject(memory, "tls_start_free_heap_bytes", webui_tls_start_free_heap);
     cJSON_AddItemToObject(root, "memory", memory);
 
     esp_chip_info_t chip;
@@ -688,11 +746,126 @@ static esp_err_t webui_system_handler(httpd_req_t *req)
     cJSON_AddStringToObject(device, "uuid", uuid.c_str());
     cJSON_AddNumberToObject(device, "cpu_cores", chip.cores);
     cJSON_AddNumberToObject(device, "cpu_revision", chip.revision);
+    cJSON_AddStringToObject(device, "last_reset_reason", webui_reset_reason_name(esp_reset_reason()));
     cJSON_AddStringToObject(device, "alarmdecoder_source", g_ad2_mode == 'S' ? "Network socket" :
                                                         g_ad2_mode == 'C' ? "Serial" : "Unavailable");
+    cJSON_AddNumberToObject(device, "tls_sessions", webui_tls_sessions);
+    cJSON_AddNumberToObject(device, "tls_session_limit",
+                            webui_server_uses_tls ? WEBUI_TLS_MAX_CLIENTS : 0);
     cJSON_AddItemToObject(root, "device", device);
 
     return webui_send_json_response(req, root);
+}
+
+/** SD-card firmware availability and integrity: GET /api/firmware */
+static esp_err_t webui_firmware_handler(httpd_req_t *req)
+{
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "installed_version", ad2_firmware_version());
+#if CONFIG_AD2IOT_USDUPDATE
+    usd_firmware_status status;
+    usd_get_firmware_status(&status);
+    cJSON_AddBoolToObject(root, "supported", true);
+    cJSON_AddBoolToObject(root, "sd_mounted", status.sd_mounted);
+    cJSON_AddBoolToObject(root, "present", status.present);
+    cJSON_AddBoolToObject(root, "valid", status.valid);
+    cJSON_AddBoolToObject(root, "update_in_progress", status.update_in_progress);
+    cJSON_AddNumberToObject(root, "size_bytes", (double)status.size_bytes);
+    cJSON_AddStringToObject(root, "version", status.version);
+    cJSON_AddStringToObject(root, "project_name", status.project_name);
+    cJSON_AddStringToObject(root, "build_date", status.build_date);
+    cJSON_AddStringToObject(root, "build_time", status.build_time);
+    cJSON_AddStringToObject(root, "error", status.error);
+    cJSON_AddBoolToObject(root, "upgrade_available",
+                          status.valid && strcmp(status.version, ad2_firmware_version()) != 0);
+#else
+    cJSON_AddBoolToObject(root, "supported", false);
+    cJSON_AddStringToObject(root, "error", "SD firmware updates are disabled in this build");
+#endif
+    return webui_send_json_response(req, root);
+}
+
+static void webui_delayed_restart(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    hal_restart();
+    vTaskDelete(NULL);
+}
+
+static esp_err_t webui_action_response(httpd_req_t *req, const char *action, const char *message)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "accepted", true);
+    cJSON_AddStringToObject(root, "action", action);
+    cJSON_AddStringToObject(root, "message", message);
+    httpd_resp_set_status(req, "202 Accepted");
+    return webui_send_json_response(req, root);
+}
+
+/** Explicit maintenance action with a custom-header CSRF guard: POST /api/action */
+static esp_err_t webui_action_handler(httpd_req_t *req)
+{
+    if (!webui_request_allowed(req)) {
+        return ESP_FAIL;
+    }
+    char guard[16] = {0};
+    const size_t guard_length = httpd_req_get_hdr_value_len(req, "X-AD2IoT-Action");
+    if (guard_length == 0 || guard_length >= sizeof(guard) ||
+            httpd_req_get_hdr_value_str(req, "X-AD2IoT-Action", guard, sizeof(guard)) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Missing maintenance-action guard");
+    }
+    if (req->content_len < 2 || req->content_len > 96) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid action request");
+    }
+    char body[97] = {0};
+    size_t received = 0;
+    while (received < req->content_len) {
+        int count = httpd_req_recv(req, body + received, req->content_len - received);
+        if (count <= 0) {
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unable to read action request");
+        }
+        received += (size_t)count;
+    }
+    cJSON *json = cJSON_ParseWithLength(body, received);
+    cJSON *action_item = json ? cJSON_GetObjectItemCaseSensitive(json, "action") : NULL;
+    if (!cJSON_IsString(action_item) || !action_item->valuestring ||
+            strcmp(guard, action_item->valuestring) != 0) {
+        cJSON_Delete(json);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid maintenance action");
+    }
+    std::string action = action_item->valuestring;
+    cJSON_Delete(json);
+
+    if (action == "restart") {
+        if (xTaskCreate(&webui_delayed_restart, "Web UI restart", 2048, NULL,
+                        tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                       "Unable to schedule restart");
+        }
+        return webui_action_response(req, "restart", "Device restart scheduled");
+    }
+    if (action == "upgradeusd") {
+#if CONFIG_AD2IOT_USDUPDATE
+        usd_firmware_status firmware;
+        if (!usd_get_firmware_status(&firmware)) {
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                       firmware.error[0] ? firmware.error : "SD firmware is invalid");
+        }
+        if (!usd_start_update()) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                       "A firmware update is already running or could not start");
+        }
+        return webui_action_response(req, "upgradeusd",
+                                     "SD firmware installation started; the device will restart after validation");
+#else
+        return httpd_resp_send_err(req, HTTPD_501_METHOD_NOT_IMPLEMENTED,
+                                   "SD firmware updates are disabled in this build");
+#endif
+    }
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown maintenance action");
 }
 
 static bool webui_sensitive_key(const std::string &section, const std::string &key)
@@ -1176,8 +1349,8 @@ void webui_server_task(void *pvParameters)
     // Configure the web server and handlers.
     server_config.uri_match_fn = httpd_uri_match_wildcard;
     server_config.lru_purge_enable = true;
-    server_config.max_open_sockets = MAX_CLIENTS;
-    server_config.max_uri_handlers = 8;
+    server_config.max_open_sockets = webui_tls_enabled ? WEBUI_TLS_MAX_CLIENTS : MAX_CLIENTS;
+    server_config.max_uri_handlers = 10;
 #if CONFIG_HTTPD_WS_SUPPORT
     httpd_uri_t ad2ws_server = {
         .uri       = "/ad2ws",
@@ -1244,6 +1417,28 @@ void webui_server_task(void *pvParameters)
         .supported_subprotocol = nullptr
 #endif
     };
+    httpd_uri_t firmware_api = {
+        .uri       = "/api/firmware",
+        .method    = HTTP_GET,
+        .handler   = webui_firmware_handler,
+        .user_ctx  = NULL,
+#if CONFIG_HTTPD_WS_SUPPORT
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr
+#endif
+    };
+    httpd_uri_t action_api = {
+        .uri       = "/api/action",
+        .method    = HTTP_POST,
+        .handler   = webui_action_handler,
+        .user_ctx  = NULL,
+#if CONFIG_HTTPD_WS_SUPPORT
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr
+#endif
+    };
     httpd_uri_t file_server = {
         .uri       = "/*",
         .method    = HTTP_GET,
@@ -1273,6 +1468,12 @@ void webui_server_task(void *pvParameters)
                 tls_config.servercert_len = certificate.length() + 1;
                 tls_config.prvtkey_pem = (const uint8_t *)private_key.c_str();
                 tls_config.prvtkey_len = private_key.length() + 1;
+                tls_config.user_cb = webui_tls_session_callback;
+                ESP_LOGI(TAG, "Starting HTTPS with %u client slots: heap=%u, minimum=%u, largest=%u",
+                         WEBUI_TLS_MAX_CLIENTS,
+                         (unsigned)esp_get_free_heap_size(),
+                         (unsigned)esp_get_minimum_free_heap_size(),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
                 err = httpd_ssl_start(&server, &tls_config);
             } else {
                 err = httpd_start(&server, &server_config);
@@ -1281,7 +1482,12 @@ void webui_server_task(void *pvParameters)
             // Register handlers after the HTTP or HTTPS listener starts.
             if (err == ESP_OK) {
                 webui_server_uses_tls = webui_tls_enabled;
-                ESP_LOGI(TAG, "Web UI listening with %s", webui_server_uses_tls ? "HTTPS" : "HTTP");
+                webui_tls_start_free_heap = webui_server_uses_tls ? esp_get_free_heap_size() : 0;
+                ESP_LOGI(TAG, "Web UI listening with %s: heap=%u, minimum=%u, largest=%u",
+                         webui_server_uses_tls ? "HTTPS" : "HTTP",
+                         (unsigned)esp_get_free_heap_size(),
+                         (unsigned)esp_get_minimum_free_heap_size(),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
                 // Set URI handlers
 #if CONFIG_HTTPD_WS_SUPPORT
                 httpd_register_uri_handler(server, &ad2ws_server);
@@ -1291,6 +1497,8 @@ void webui_server_task(void *pvParameters)
                 httpd_register_uri_handler(server, &system_api);
                 httpd_register_uri_handler(server, &config_api);
                 httpd_register_uri_handler(server, &logs_api);
+                httpd_register_uri_handler(server, &firmware_api);
+                httpd_register_uri_handler(server, &action_api);
                 httpd_register_uri_handler(server, &file_server);
             } else {
                 // error long 10s sleep.
@@ -1306,6 +1514,8 @@ void webui_server_task(void *pvParameters)
                 const bool stop_tls = webui_server_uses_tls;
                 server = nullptr;
                 webui_server_uses_tls = false;
+                webui_tls_sessions = 0;
+                webui_tls_start_free_heap = 0;
                 taskEXIT_CRITICAL(&spinlock);
                 err = stop_tls ? httpd_ssl_stop(ts) : httpd_stop(ts);
                 if (err != ESP_OK) {

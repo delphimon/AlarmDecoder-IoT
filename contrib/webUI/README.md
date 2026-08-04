@@ -7,7 +7,7 @@ Copy the contents of flash-drive folder into the root directory of a uSD flash d
 
 To access the web interface connect to the IP address or host name of the ESP32-POE-ISO board that is configured with the 'webui' build of the AD2IoT firmware.
 
-The dashboard provides live partition state, keypad display text, power/battery/chime/bypass indicators, active zones, quick arm/disarm controls, emergency controls, a reboot-scoped 64-event activity log, and a full `0-9`, `*`, `#` virtual keypad. The header shows the firmware version/build date, connection mode, and device IP. A read-only Settings pane shows runtime health, SD/SPIFFS state, the active configuration, both stored `ad2iot.ini` files, and recent device logs. Credential values and alarm codes are redacted on the device. Emergency controls retain the three-tap safeguard. The web assets have no internet dependencies.
+The dashboard provides live partition state, keypad display text, power/battery/chime/bypass indicators, readable active-zone cards, quick arm/disarm controls, emergency controls, a reboot-scoped 64-event activity log with relative and exact client-local times, and a full `0-9`, `*`, `#` virtual keypad. The header shows the firmware version/build date, connection mode, and device IP. Settings shows runtime health, TLS/reset diagnostics, SD/SPIFFS state, the active configuration, both stored `ad2iot.ini` files, recent device logs, SD firmware status, and confirmed upgrade/restart controls. Credential values and alarm codes are redacted on the device. Emergency controls retain the three-tap safeguard. The web assets have no internet dependencies.
 ## Arguments
 - codeID : The codeid slot to use on the AD2IoT for arming etc.
 - partID : The partition slot to use for this virtual keypad. If partition is configured for address 18 then this virtual keypad will show that keypads partition state.
@@ -18,7 +18,7 @@ The dashboard provides live partition state, keypad display text, power/battery/
 -   http://192.168.0.1/app.html
     - Defaults to PartID 0 and codeID 0
 
-## Read-only HTTP API
+## HTTP API
 
 - `GET /api/state?partition=0` returns the current state for a configured partition slot.
 - `GET /api/history?limit=64` returns newest-first activity from the current boot session.
@@ -26,6 +26,8 @@ The dashboard provides live partition state, keypad display text, power/battery/
 - `GET /api/system` returns build, network, storage, memory, and device details.
 - `GET /api/config?source=active|spiffs|sd` returns a redacted configuration snapshot as plain text.
 - `GET /api/logs?limit=64` returns newest-first device logs from the current boot session.
+- `GET /api/firmware` validates `/sdcard/firmware.bin` and reports its version, build, size, and availability.
+- `POST /api/action` performs the confirmed `restart` or `upgradeusd` maintenance action. The same action must be present in the JSON body and `X-AD2IoT-Action` header.
 
 Responses are JSON and use `Cache-Control: no-store`. The same webUI IP/CIDR ACL applies to the API and WebSocket endpoint.
 
@@ -41,7 +43,7 @@ sslcert = certs/fullchain.pem
 sslkey = certs/privkey.pem
 ```
 
-Paths must remain beneath `/sdcard`. The private key must be unencrypted because the embedded server cannot prompt for a passphrase. Restart after certificate renewal so the new files are loaded. When HTTPS is enabled, missing or invalid PEM files prevent the Web UI from starting rather than exposing an HTTP fallback.
+Paths must remain beneath `/sdcard`. The private key must be unencrypted because the embedded server cannot prompt for a passphrase. Restart after certificate renewal so the new files are loaded. When HTTPS is enabled, missing or invalid PEM files prevent the Web UI from starting rather than exposing an HTTP fallback. HTTPS uses a two-client limit because ESP-IDF documents about 40 KiB of RAM per TLS socket. Settings exposes reset cause, heap low-water/largest-block values, and live TLS session count; serial logs include the same heap data on TLS session open/close.
 
 ## WebSocket commands
 

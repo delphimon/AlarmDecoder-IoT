@@ -474,6 +474,70 @@ static void _cli_cmd_ad2logmode_event(const char *string)
     ad2_printf_host(false, "The current logging mode mode is '%c'.\r\n", cmode);
 }
 
+/**
+ * @brief Show the reboot-scoped log history or configure persistent uSD logs.
+ */
+static void _cli_cmd_logs_event(const char *string)
+{
+    std::string command;
+    ad2_copy_nth_arg(command, string, 1);
+
+    if (command.empty()) {
+        size_t printed = ad2_print_recent_logs(AD2_LOG_HISTORY_SIZE);
+        ad2_printf_host(false, "%u log entries shown (oldest to newest).\r\n",
+                        (unsigned int)printed);
+        return;
+    }
+
+    std::string normalized = command;
+    ad2_lcase(normalized);
+    if (normalized == "status" || normalized == "sd") {
+        std::string value;
+        bool setting_changed = false;
+        if (normalized == "sd" && ad2_copy_nth_arg(value, string, 2) >= 0) {
+            ad2_ucase(value);
+            if (value == "Y" || value == "YES" || value == "ON" || value == "1") {
+                ad2_set_config_key_bool(AD2MAIN_CONFIG_SECTION, SDLOG_CONFIG_KEY, true);
+                setting_changed = true;
+                if (!ad2_set_sd_logging_enabled(true)) {
+                    ad2_printf_host(false, "Unable to enable uSD logging: no mounted card or insufficient memory.\r\n");
+                }
+            } else if (value == "N" || value == "NO" || value == "OFF" || value == "0") {
+                ad2_set_config_key_bool(AD2MAIN_CONFIG_SECTION, SDLOG_CONFIG_KEY, false);
+                ad2_set_sd_logging_enabled(false);
+                setting_changed = true;
+            } else {
+                ad2_printf_host(false, "Invalid uSD logging value; use Y or N.\r\n");
+                return;
+            }
+        }
+
+        bool enabled = false;
+        bool active = false;
+        uint32_t dropped = 0;
+        uint32_t write_errors = 0;
+        ad2_get_sd_logging_status(&enabled, &active, &dropped, &write_errors);
+        ad2_printf_host(false,
+                        "uSD logging configured=%s active=%s path=%s max=512KiB rotated=%s dropped=%lu write_errors=%lu%s\r\n",
+                        enabled ? "Y" : "N", active ? "Y" : "N",
+                        AD2_SD_LOG_PATH, AD2_SD_LOG_OLD_PATH,
+                        (unsigned long)dropped, (unsigned long)write_errors,
+                        setting_changed ? " (saved on restart)" : "");
+        return;
+    }
+
+    char *end = NULL;
+    long requested = strtol(command.c_str(), &end, 10);
+    if (!end || *end != '\0' || requested < 1 || requested > AD2_LOG_HISTORY_SIZE) {
+        ad2_printf_host(false, "Invalid log count; use 1-%d, status, or sd [Y|N].\r\n",
+                        AD2_LOG_HISTORY_SIZE);
+        return;
+    }
+    size_t printed = ad2_print_recent_logs((size_t)requested);
+    ad2_printf_host(false, "%u log entries shown (oldest to newest).\r\n",
+                    (unsigned int)printed);
+}
+
 
 /**
  * @brief virtual switch command event.
@@ -833,6 +897,14 @@ static struct cli_command cmd_list[] = {
         "    D                       Debugging\r\n"
         "    N                       Warnings and errors only(default)\r\n"
         , _cli_cmd_ad2logmode_event
+    },
+    {
+        (char*)AD2_CMD_LOGS,(char*)
+        "Usage: logs [1-64 | status | sd [Y|N]]\r\n"
+        "    Show the reboot-scoped log history on serial or network CLI.\r\n"
+        "    'logs sd Y' also writes logs asynchronously to /sdcard/ad2iot.log.\r\n"
+        "    The file rotates at 512 KiB to /sdcard/ad2iot.log.1.\r\n"
+        , _cli_cmd_logs_event
     },
     {
         (char*)AD2_CMD_FACTORY,(char*)

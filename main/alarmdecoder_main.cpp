@@ -1030,6 +1030,9 @@ extern "C" {
         size_t mem_b = heap_caps_get_free_size(MALLOC_CAP_8BIT);
         ad2_printf_host(true, "%s: Approximate Configuration memory usage: %d B", TAG, mem_a - mem_b);
 
+        // Persistent logging is opt-in and starts only after config and uSD mount.
+        ad2_init_sd_logging();
+
         // load and set the logging level.
         hal_set_log_mode(ad2_get_log_mode());
 

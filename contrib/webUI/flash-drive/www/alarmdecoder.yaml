@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: AlarmDecoder IoT Web API
-  description: Read-only current-state and reboot-scoped activity endpoints. Access is restricted by the webUI IP/CIDR ACL.
-  version: "1.0"
+  description: State, diagnostics, SD firmware validation, and guarded maintenance endpoints. Access is restricted by the webUI IP/CIDR ACL.
+  version: "1.1"
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0.html
@@ -55,6 +55,58 @@ paths:
                 $ref: "#/components/schemas/HistoryResponse"
         "400":
           description: Invalid limit.
+  /api/firmware:
+    get:
+      summary: Inspect and validate SD-card firmware.bin
+      responses:
+        "200":
+          description: Installed version and SD image availability, metadata, and integrity status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  installed_version: { type: string }
+                  supported: { type: boolean }
+                  sd_mounted: { type: boolean }
+                  present: { type: boolean }
+                  valid: { type: boolean }
+                  update_in_progress: { type: boolean }
+                  upgrade_available: { type: boolean }
+                  size_bytes: { type: number }
+                  version: { type: string }
+                  project_name: { type: string }
+                  build_date: { type: string }
+                  build_time: { type: string }
+                  error: { type: string }
+  /api/action:
+    post:
+      summary: Restart the device or install validated SD-card firmware
+      parameters:
+        - in: header
+          name: X-AD2IoT-Action
+          required: true
+          schema:
+            type: string
+            enum: [restart, upgradeusd]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [restart, upgradeusd]
+      responses:
+        "202":
+          description: Action accepted. Upgrade and restart actions disconnect the client.
+        "400":
+          description: Invalid action or unavailable/invalid SD firmware.
+        "403":
+          description: Missing or mismatched action guard.
 components:
   schemas:
     ZoneAlert:

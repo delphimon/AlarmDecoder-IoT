@@ -97,6 +97,15 @@
 // @brief logmode setting key under main section
 #define LOGMODE_CONFIG_KEY    "logmode"
 
+// @brief opt-in persistent diagnostic log on the mounted uSD card
+#define SDLOG_CONFIG_KEY      "sdlog"
+
+// @brief bounded diagnostic log sizes and uSD paths
+#define AD2_LOG_HISTORY_SIZE 64
+#define AD2_SD_LOG_MAX_BYTES (512 * 1024)
+#define AD2_SD_LOG_PATH "/" AD2_USD_MOUNT_POINT "/ad2iot.log"
+#define AD2_SD_LOG_OLD_PATH "/" AD2_USD_MOUNT_POINT "/ad2iot.log.1"
+
 // UART RX buffer size
 #define AD2_UART_RX_BUFF_SIZE  100
 #define MAX_UART_CMD_SIZE    (1024)

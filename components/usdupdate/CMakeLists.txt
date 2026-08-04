@@ -5,5 +5,6 @@ idf_component_register(SRCS "usdupdate.cpp"
                     REQUIRES idf::esp-tls
                     REQUIRES idf::esp_https_ota
                     REQUIRES idf::json
+                    REQUIRES idf::mbedtls
                     INCLUDE_DIRS . ../../main/)
 project(usdupdate)

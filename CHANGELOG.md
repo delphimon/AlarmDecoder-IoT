@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
-- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1107`; `version.txt` is now the single runtime version source.
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1110`; `version.txt` is now the single runtime version source.
+- [x] WEBUI: serialize HTTPS REST operations alongside the persistent WSS connection so the two-session TLS budget no longer resets configuration, log, firmware, or system requests.
+- [x] CORE: expose the bounded diagnostic history through serial and network CLI, and add opt-in asynchronous, rotating uSD log persistence with drop/write-error status.
+- [x] WEBUI/USDUPDATE: reduce HTTPS client memory pressure and expose TLS/reset/heap diagnostics; validate and report SD firmware, add guarded upgrade/restart controls, exact activity times, and readable zone cards.
 - [x] WEBUI: raise the HTTP request-header limit to support normal modern-browser HTTPS requests without 431 responses.
 - [x] WEBUI: compact the dashboard, move build/network details below the primary controls, show build time, and add opt-in HTTPS using SD-card PEM certificate chains/private keys.
 - [x] WEBUI: show firmware build/date, network mode and IP; add a read-only Settings pane for runtime health, storage state, redacted active/SPIFFS/SD configuration, and reboot-scoped device logs.

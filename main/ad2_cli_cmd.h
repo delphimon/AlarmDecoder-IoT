@@ -34,6 +34,7 @@
 #define AD2_CMD_CONFIG   "ad2config"
 #define AD2_CMD_TERM     "ad2term"
 #define AD2_CMD_LOGMODE  "logmode"
+#define AD2_CMD_LOGS     "logs"
 #define AD2_CMD_FACTORY  "factory-reset"
 #define AD2_CMD_TOP      "top"
 #define AD2_CMD_UNLOCKER "teaser :c)"

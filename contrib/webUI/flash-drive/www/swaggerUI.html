@@ -11,9 +11,11 @@
 <body>
   <p><a href="/app.html">← Dashboard</a></p>
   <h1>AlarmDecoder Web API</h1>
-  <p class="muted">Read-only JSON endpoints. The webUI IP/CIDR ACL applies to every request.</p>
+  <p class="muted">JSON status and guarded maintenance endpoints. The webUI IP/CIDR ACL applies to every request.</p>
   <article><strong>Current state</strong><p><code>GET /api/state?partition=0</code></p><span class="muted">Returns a live partition snapshot and active zone alerts.</span></article>
   <article><strong>Activity history</strong><p><code>GET /api/history?limit=64&amp;partition=1</code></p><span class="muted">Returns newest-first events retained during the current boot session. The partition filter is optional.</span></article>
+  <article><strong>SD firmware</strong><p><code>GET /api/firmware</code></p><span class="muted">Validates firmware.bin and returns its version, build, size, and integrity status.</span></article>
+  <article><strong>Maintenance</strong><p><code>POST /api/action</code></p><span class="muted">Runs restart or upgradeusd when the JSON action matches the X-AD2IoT-Action header.</span></article>
   <h2>Machine-readable definition</h2>
   <p>Download the <a href="/alarmdecoder.yaml">OpenAPI 3.0 definition</a>.</p>
 </body>

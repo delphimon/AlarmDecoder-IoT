@@ -24,7 +24,25 @@
 #ifndef _USDUPDATE_UTIL_H
 #define _USDUPDATE_UTIL_H
 
+#include <stddef.h>
+
+struct usd_firmware_status {
+    bool sd_mounted;
+    bool present;
+    bool valid;
+    bool update_in_progress;
+    size_t size_bytes;
+    char version[32];
+    char project_name[32];
+    char build_date[16];
+    char build_time[16];
+    char error[96];
+};
+
 void usd_do_update(const char *arg);
+bool usd_start_update();
+bool usd_update_in_progress();
+bool usd_get_firmware_status(usd_firmware_status *status);
 void usdupdate_register_cmds();
 void usdupdate_init();
 

@@ -54,6 +54,11 @@ cJSON *ad2_get_ad2iot_device_info_json();
 cJSON *ad2_get_partition_state_json(AD2PartitionState *);
 cJSON *ad2_get_partition_zone_alerts_json(AD2PartitionState *);
 cJSON *ad2_get_recent_logs_json(size_t limit);
+size_t ad2_print_recent_logs(size_t limit);
+void ad2_init_sd_logging();
+bool ad2_set_sd_logging_enabled(bool enabled);
+void ad2_get_sd_logging_status(bool *enabled, bool *active,
+                               uint32_t *dropped, uint32_t *write_errors);
 const char *ad2_firmware_version();
 int ad2_log_vprintf_host(const char *fmt, va_list args);
 void ad2_printf_host(bool prefix, const char *format, ...);

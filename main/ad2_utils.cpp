@@ -23,6 +23,7 @@
 // FreeRTOS includes
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 
 static const char *TAG = "AD2UTIL";
@@ -60,8 +61,8 @@ const char *ad2_firmware_version()
 }
 
 /* Bounded, reboot-scoped diagnostic log retained for the read-only Web UI. */
-#define AD2_LOG_HISTORY_SIZE 64
 #define AD2_LOG_LINE_SIZE 192
+#define AD2_SD_LOG_QUEUE_SIZE 16
 struct ad2_log_entry {
     uint64_t uptime_ms;
     char text[AD2_LOG_LINE_SIZE];
@@ -69,22 +70,137 @@ struct ad2_log_entry {
 static ad2_log_entry _ad2_log_history[AD2_LOG_HISTORY_SIZE];
 static size_t _ad2_log_history_head = 0;
 static size_t _ad2_log_history_count = 0;
+static QueueHandle_t _ad2_sd_log_queue = NULL;
+static volatile bool _ad2_sd_log_enabled = false;
+static bool _ad2_sd_log_task_started = false;
+static uint32_t _ad2_sd_log_dropped = 0;
+static uint32_t _ad2_sd_log_write_errors = 0;
+
+static void _ad2_sd_log_task(void *pvParameters)
+{
+    FILE *log_file = NULL;
+    size_t file_size = 0;
+    ad2_log_entry entry;
+    char line[AD2_LOG_LINE_SIZE + 40];
+
+    while (true) {
+        if (xQueueReceive(_ad2_sd_log_queue, &entry, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            if (!_ad2_sd_log_enabled && log_file) {
+                fclose(log_file);
+                log_file = NULL;
+                file_size = 0;
+            }
+            continue;
+        }
+
+        if (!_ad2_sd_log_enabled || !g_uSD_mounted) {
+            continue;
+        }
+
+        int line_length = snprintf(line, sizeof(line), "[%llu ms] %s\r\n",
+                                   (unsigned long long)entry.uptime_ms, entry.text);
+        if (line_length <= 0) {
+            continue;
+        }
+        size_t bytes_to_write = std::min((size_t)line_length, sizeof(line) - 1);
+
+        if (!log_file) {
+            log_file = fopen(AD2_SD_LOG_PATH, "a+");
+            if (!log_file) {
+                taskENTER_CRITICAL(&spinlock);
+                _ad2_sd_log_write_errors++;
+                taskEXIT_CRITICAL(&spinlock);
+                continue;
+            }
+            if (fseek(log_file, 0, SEEK_END) == 0) {
+                long position = ftell(log_file);
+                file_size = position > 0 ? (size_t)position : 0;
+            }
+        }
+
+        if (file_size + bytes_to_write > AD2_SD_LOG_MAX_BYTES) {
+            fclose(log_file);
+            log_file = NULL;
+            remove(AD2_SD_LOG_OLD_PATH);
+            if (rename(AD2_SD_LOG_PATH, AD2_SD_LOG_OLD_PATH) != 0) {
+                taskENTER_CRITICAL(&spinlock);
+                _ad2_sd_log_write_errors++;
+                taskEXIT_CRITICAL(&spinlock);
+                log_file = fopen(AD2_SD_LOG_PATH, "a");
+                if (!log_file) {
+                    taskENTER_CRITICAL(&spinlock);
+                    _ad2_sd_log_write_errors++;
+                    taskEXIT_CRITICAL(&spinlock);
+                }
+                continue;
+            }
+            log_file = fopen(AD2_SD_LOG_PATH, "w");
+            file_size = 0;
+            if (!log_file) {
+                taskENTER_CRITICAL(&spinlock);
+                _ad2_sd_log_write_errors++;
+                taskEXIT_CRITICAL(&spinlock);
+                continue;
+            }
+        }
+
+        size_t written = fwrite(line, 1, bytes_to_write, log_file);
+        if (written != bytes_to_write || fflush(log_file) != 0) {
+            taskENTER_CRITICAL(&spinlock);
+            _ad2_sd_log_write_errors++;
+            taskEXIT_CRITICAL(&spinlock);
+        }
+        file_size += written;
+    }
+}
+
+static bool _ad2_start_sd_log_task()
+{
+    if (_ad2_sd_log_task_started) {
+        return true;
+    }
+    if (!g_uSD_mounted) {
+        return false;
+    }
+    if (!_ad2_sd_log_queue) {
+        _ad2_sd_log_queue = xQueueCreate(AD2_SD_LOG_QUEUE_SIZE, sizeof(ad2_log_entry));
+        if (!_ad2_sd_log_queue) {
+            return false;
+        }
+    }
+    if (xTaskCreate(_ad2_sd_log_task, "AD2 SD log", 1024 * 4, NULL,
+                    tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+        vQueueDelete(_ad2_sd_log_queue);
+        _ad2_sd_log_queue = NULL;
+        return false;
+    }
+    _ad2_sd_log_task_started = true;
+    return true;
+}
 
 static void ad2_capture_log_line(const char *text)
 {
     if (!text || !text[0]) {
         return;
     }
-    taskENTER_CRITICAL(&spinlock);
-    ad2_log_entry &entry = _ad2_log_history[_ad2_log_history_head];
+    ad2_log_entry entry = {};
     entry.uptime_ms = hal_uptime_us() / 1000;
     strlcpy(entry.text, text, sizeof(entry.text));
     entry.text[strcspn(entry.text, "\r\n")] = '\0';
+    taskENTER_CRITICAL(&spinlock);
+    _ad2_log_history[_ad2_log_history_head] = entry;
     _ad2_log_history_head = (_ad2_log_history_head + 1) % AD2_LOG_HISTORY_SIZE;
     if (_ad2_log_history_count < AD2_LOG_HISTORY_SIZE) {
         _ad2_log_history_count++;
     }
     taskEXIT_CRITICAL(&spinlock);
+
+    if (_ad2_sd_log_enabled && _ad2_sd_log_queue &&
+            xQueueSend(_ad2_sd_log_queue, &entry, 0) != pdPASS) {
+        taskENTER_CRITICAL(&spinlock);
+        _ad2_sd_log_dropped++;
+        taskEXIT_CRITICAL(&spinlock);
+    }
 }
 
 cJSON *ad2_get_recent_logs_json(size_t limit)
@@ -110,6 +226,66 @@ cJSON *ad2_get_recent_logs_json(size_t limit)
         cJSON_AddItemToArray(items, item);
     }
     return items;
+}
+
+size_t ad2_print_recent_logs(size_t limit)
+{
+    size_t count;
+    size_t head;
+    taskENTER_CRITICAL(&spinlock);
+    count = _ad2_log_history_count;
+    head = _ad2_log_history_head;
+    taskEXIT_CRITICAL(&spinlock);
+
+    limit = std::min(limit, count);
+    const size_t first = (head + AD2_LOG_HISTORY_SIZE - limit) % AD2_LOG_HISTORY_SIZE;
+    for (size_t offset = 0; offset < limit; offset++) {
+        ad2_log_entry entry;
+        const size_t index = (first + offset) % AD2_LOG_HISTORY_SIZE;
+        taskENTER_CRITICAL(&spinlock);
+        entry = _ad2_log_history[index];
+        taskEXIT_CRITICAL(&spinlock);
+        std::string line = ad2_string_printf("[%llu ms] %s\r\n",
+                                             (unsigned long long)entry.uptime_ms,
+                                             entry.text);
+        cli_write_bytes(line.c_str(), line.length());
+    }
+    return limit;
+}
+
+void ad2_init_sd_logging()
+{
+    bool enabled = false;
+    ad2_get_config_key_bool(CFG_SECTION_MAIN, SDLOG_CONFIG_KEY, &enabled);
+    ad2_set_sd_logging_enabled(enabled);
+}
+
+bool ad2_set_sd_logging_enabled(bool enabled)
+{
+    _ad2_sd_log_enabled = enabled;
+    if (enabled && !_ad2_start_sd_log_task()) {
+        return false;
+    }
+    return true;
+}
+
+void ad2_get_sd_logging_status(bool *enabled, bool *active,
+                               uint32_t *dropped, uint32_t *write_errors)
+{
+    taskENTER_CRITICAL(&spinlock);
+    if (enabled) {
+        *enabled = _ad2_sd_log_enabled;
+    }
+    if (active) {
+        *active = _ad2_sd_log_enabled && _ad2_sd_log_task_started && g_uSD_mounted;
+    }
+    if (dropped) {
+        *dropped = _ad2_sd_log_dropped;
+    }
+    if (write_errors) {
+        *write_errors = _ad2_sd_log_write_errors;
+    }
+    taskEXIT_CRITICAL(&spinlock);
 }
 
 /**
