@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1113` for the authenticated Web UI remediation build.
+- [x] SECURITY/WEBUI: require a configured operator account for all static files, diagnostics, REST actions, and WebSocket commands; establish a random reboot-scoped HttpOnly/SameSite session after Basic authentication; reject cross-origin browser controls; and add restrictive browser response headers.
+- [x] SECURITY/WEBUI: disable the service by default, ship no credentials, default missing ACLs to loopback, fail closed on missing/invalid credentials or ACLs, and redact the new password setting from configuration/log views.
+- [x] TEST/CI: expand host regression coverage from 6 to 21 checks for Web UI defaults and authorization boundaries, browser credential handling, session-cookie lifetime, maintenance guards, path traversal, firmware size/identity enforcement, and release packaging.
+- [x] CI: enforce conservative 98,304-byte static-RAM and 1,650,000-byte application-flash budgets after every primary firmware build.
+- [x] CI: parse the ESP application descriptor and reject stale local/CI artifacts whose embedded version differs from `version.txt`.
 - [x] CI/RELEASE: make website-published GitHub releases reliably attach their binary package by addressing the repository explicitly, and reject tags that do not match the embedded firmware version.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1112`; `version.txt` remains the single runtime version source.
 - [x] CI: repair clean GitHub runner builds by using Python 3.12 and pinning `setuptools` 80.9.0 for the Espressif32 6.4 builder's `pkg_resources` dependency; verify the replacement GitHub run completes successfully.
@@ -25,13 +31,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - [x] CORE: Add an opt-in, password-protected and ACL-restricted TCP transport for the CLI.
 
 ### High-priority backlog
-- [ ] SECURITY: require authentication and authorization for web alarm controls and diagnostic/configuration APIs; do not rely on an allow-all IP ACL.
+- [x] SECURITY: require authentication and authorization for web alarm controls and diagnostic/configuration APIs; the service now fails closed instead of relying on an allow-all IP ACL.
 - [x] SECURITY: disable unauthenticated FTP by default and require credentials plus a valid ACL before startup.
 - [ ] SECURITY: independently authorize firmware installation and prevent installation of unsigned, wrong-board, or disallowed-downgrade firmware, including through FTP.
 - [ ] SECURITY: enable outbound TLS peer verification and add signed firmware, downgrade policy, and boot rollback before treating remote or SD updates as trusted.
 - [x] RELIABILITY: bound Wi-Fi SSID/password copies and make factory reset handle the higher-priority SD configuration safely.
 - [ ] RELIABILITY: centralize restart cleanup across network, storage, and integration services.
-- [ ] TEST: expand the initial host security/package regression suite with parser, redaction, path, and action-authorization tests plus hardware-in-loop smoke coverage.
+- [ ] TEST: add functional parser and redaction tests plus hardware-in-loop authorization, HTTPS/WSS, update, and restart smoke coverage. Static path/action/session regression checks are now present.
 - [ ] TOOLCHAIN: migrate from PlatformIO Espressif32 6.4/ESP-IDF 5.1.1 to 6.13/ESP-IDF 5.5.3 in a dedicated compatibility change, then evaluate Espressif32 7/ESP-IDF 6 separately.
 - [ ] TOOLCHAIN: compatibility-test updates from SimpleIni 4.19 to 4.26 and `{fmt}` 8.0.1 to 12.2.0.
 - [ ] STYLE: add a non-mutating format/style check after agreeing on a repository-wide baseline; the existing tree is not yet style-clean.

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -30,6 +31,10 @@ class SecurityDefaultsTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.ftpd = read_section("ftpd")
         cls.netcli = read_section("netcli")
+        cls.webui = read_section("webui")
+        cls.webui_source = (ROOT / "components" / "webUI" / "webUI.cpp").read_text(
+            encoding="utf-8"
+        )
 
     def test_ftp_is_disabled_and_has_no_shipped_credentials(self) -> None:
         self.assertEqual(self.ftpd.get("enable", "").casefold(), "false")
@@ -44,6 +49,81 @@ class SecurityDefaultsTests(unittest.TestCase):
     def test_network_cli_is_disabled_and_has_no_shipped_password(self) -> None:
         self.assertEqual(self.netcli.get("enable", "").casefold(), "false")
         self.assertEqual(self.netcli.get("password", ""), "")
+
+    def test_webui_is_disabled_and_has_no_shipped_credentials(self) -> None:
+        self.assertEqual(self.webui.get("enable", "").casefold(), "false")
+        self.assertEqual(self.webui.get("user", ""), "")
+        self.assertEqual(self.webui.get("password", ""), "")
+
+    def test_webui_component_default_acl_is_loopback_only(self) -> None:
+        match = re.search(
+            r'#define\s+WEBUI_DEFAULT_ACL\s+"([^"]+)"', self.webui_source
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "127.0.0.1")
+
+    def test_webui_requires_valid_credentials_before_starting(self) -> None:
+        init = self.webui_source[self.webui_source.index("void webui_init(void)") :]
+        self.assertIn("webui_load_credentials()", init)
+        self.assertIn("acl.empty()", init)
+        self.assertIn("refusing to start", init)
+
+    def test_webui_http_routes_share_the_authentication_guard(self) -> None:
+        handlers = (
+            "webui_state_handler",
+            "webui_history_handler",
+            "webui_system_handler",
+            "webui_firmware_handler",
+            "webui_action_handler",
+            "webui_config_handler",
+            "webui_logs_handler",
+            "file_get_handler",
+        )
+        for handler in handlers:
+            start = self.webui_source.index(f"{handler}(httpd_req_t *req)")
+            prologue = self.webui_source[start : start + 300]
+            self.assertIn("webui_authorize_request(req)", prologue, handler)
+
+    def test_websocket_commands_require_an_authenticated_session(self) -> None:
+        handler = self.webui_source[
+            self.webui_source.index("esp_err_t ad2ws_handler") :
+            self.webui_source.index("static int webui_query_int")
+        ]
+        self.assertIn("webui_authorize_request(req)", handler)
+        self.assertIn("authenticated", handler)
+        self.assertIn("synced", handler)
+        self.assertIn("webui_origin_allowed(req)", handler)
+
+    def test_maintenance_actions_require_origin_and_custom_header(self) -> None:
+        start = self.webui_source.index("webui_action_handler(httpd_req_t *req)")
+        handler = self.webui_source[start : start + 2600]
+        self.assertIn("webui_authorize_request(req)", handler)
+        self.assertIn("webui_origin_allowed(req)", handler)
+        self.assertIn('"X-AD2IoT-Action"', handler)
+        self.assertIn("strcmp(guard, action_item->valuestring) != 0", handler)
+
+    def test_session_cookie_uses_persistent_secure_storage(self) -> None:
+        self.assertIn("webui_session_cookie_https", self.webui_source)
+        self.assertIn("HttpOnly; SameSite=Strict", self.webui_source)
+        self.assertIn('webui_session_cookie_http + "; Secure"', self.webui_source)
+        setter_start = self.webui_source.index("static void webui_set_session_cookie")
+        setter = self.webui_source[setter_start : setter_start + 700]
+        self.assertIn("webui_session_cookie_https", setter)
+        self.assertNotIn("std::string cookie =", setter)
+
+    def test_browser_rest_requests_send_same_origin_credentials(self) -> None:
+        app = (ROOT / "contrib" / "webUI" / "flash-drive" / "www" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertGreaterEqual(app.count('credentials: "same-origin"'), 5)
+
+    def test_webui_static_path_rejects_traversal(self) -> None:
+        start = self.webui_source.index("esp_err_t file_get_handler")
+        handler = self.webui_source[start : start + 7000]
+        self.assertIn('strstr(filename, "..")', handler)
+        self.assertIn("strchr(filename, '\\\\')", handler)
+        self.assertIn('"Content-Security-Policy"', handler)
+        self.assertIn('"X-Frame-Options", "DENY"', handler)
 
     def test_factory_reset_keeps_ftp_disabled_and_loopback_only(self) -> None:
         source = (ROOT / "main" / "device_control.cpp").read_text(encoding="utf-8")

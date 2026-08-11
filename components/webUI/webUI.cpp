@@ -58,15 +58,23 @@ static const char *TAG = "WEBUI";
 #define WEBUI_SUBCMD_SSL       "ssl"
 #define WEBUI_SUBCMD_SSLCERT   "sslcert"
 #define WEBUI_SUBCMD_SSLKEY    "sslkey"
+#define WEBUI_SUBCMD_USER      "user"
+#define WEBUI_SUBCMD_PASSWORD  "password"
 
 #define WEBUI_CONFIG_SECTION  "webui"
 
-#define WEBUI_DEFAULT_ACL "0.0.0.0/0"
+#define WEBUI_DEFAULT_ACL "127.0.0.1"
 #define WEBUI_HISTORY_SIZE 64
 #define WEBUI_WS_MAX_PAYLOAD 256
 #define WEBUI_CONFIG_MAX_BYTES (64 * 1024)
 #define WEBUI_DEFAULT_SSL_CERT "certs/fullchain.pem"
 #define WEBUI_DEFAULT_SSL_KEY  "certs/privkey.pem"
+#define WEBUI_AUTH_USER_MAX 32
+#define WEBUI_AUTH_PASSWORD_MIN 12
+#define WEBUI_AUTH_PASSWORD_MAX 64
+#define WEBUI_AUTH_HEADER_MAX 160
+#define WEBUI_COOKIE_HEADER_MAX 512
+#define WEBUI_SESSION_COOKIE "AD2IOT_SESSION"
 
 /* Max length a file path can have on storage */
 #define FILE_PATH_MAX (255)
@@ -83,6 +91,10 @@ static std::string webui_tls_cert_setting = WEBUI_DEFAULT_SSL_CERT;
 static std::string webui_tls_key_setting = WEBUI_DEFAULT_SSL_KEY;
 static unsigned webui_tls_sessions = 0;
 static size_t webui_tls_start_free_heap = 0;
+static std::string webui_basic_authorization;
+static std::string webui_session_token;
+static std::string webui_session_cookie_http;
+static std::string webui_session_cookie_https;
 
 /* ACL control */
 ad2_acl_check webui_acl;
@@ -96,6 +108,8 @@ char * WEBUI_SUBCMD [] = {
     (char*)WEBUI_SUBCMD_SSL,
     (char*)WEBUI_SUBCMD_SSLCERT,
     (char*)WEBUI_SUBCMD_SSLKEY,
+    (char*)WEBUI_SUBCMD_USER,
+    (char*)WEBUI_SUBCMD_PASSWORD,
     0 // EOF
 };
 
@@ -105,6 +119,8 @@ enum {
     WEBUI_SUBCMD_SSL_ID,
     WEBUI_SUBCMD_SSLCERT_ID,
     WEBUI_SUBCMD_SSLKEY_ID,
+    WEBUI_SUBCMD_USER_ID,
+    WEBUI_SUBCMD_PASSWORD_ID,
 };
 
 /**
@@ -113,6 +129,8 @@ enum {
 struct ws_session_storage {
     int partID;
     int codeID;
+    bool authenticated;
+    bool synced;
 };
 
 /**
@@ -344,6 +362,166 @@ static bool webui_request_allowed(httpd_req_t *req)
     return false;
 }
 
+static bool webui_secure_equal(const std::string &left, const std::string &right)
+{
+    if (left.length() != right.length()) {
+        return false;
+    }
+    unsigned char difference = 0;
+    for (size_t index = 0; index < left.length(); index++) {
+        difference |= (unsigned char)(left[index] ^ right[index]);
+    }
+    return difference == 0;
+}
+
+static bool webui_valid_credentials(const std::string &user, const std::string &password)
+{
+    if (user.empty() || user.length() > WEBUI_AUTH_USER_MAX ||
+            password.length() < WEBUI_AUTH_PASSWORD_MIN ||
+            password.length() > WEBUI_AUTH_PASSWORD_MAX) {
+        return false;
+    }
+    for (char value : user) {
+        const unsigned char byte = (unsigned char)value;
+        if (byte < 0x21 || byte > 0x7e || value == ':') {
+            return false;
+        }
+    }
+    for (char value : password) {
+        const unsigned char byte = (unsigned char)value;
+        if (byte < 0x20 || byte > 0x7e) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool webui_load_credentials()
+{
+    std::string user;
+    std::string password;
+    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_USER, user);
+    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_PASSWORD, password);
+    if (!webui_valid_credentials(user, password)) {
+        return false;
+    }
+    webui_basic_authorization = "Basic " + ad2_make_basic_auth_string(user, password);
+
+    uint8_t random_bytes[16];
+    esp_fill_random(random_bytes, sizeof(random_bytes));
+    char token[(sizeof(random_bytes) * 2) + 1];
+    for (size_t index = 0; index < sizeof(random_bytes); index++) {
+        snprintf(token + (index * 2), 3, "%02x", random_bytes[index]);
+    }
+    token[sizeof(token) - 1] = '\0';
+    webui_session_token = token;
+    webui_session_cookie_http = std::string(WEBUI_SESSION_COOKIE) + "=" + webui_session_token +
+                                "; Path=/; HttpOnly; SameSite=Strict";
+    webui_session_cookie_https = webui_session_cookie_http + "; Secure";
+    return true;
+}
+
+static bool webui_get_header(httpd_req_t *req, const char *name, size_t maximum,
+                             std::string &value)
+{
+    const size_t length = httpd_req_get_hdr_value_len(req, name);
+    if (!length || length > maximum) {
+        return false;
+    }
+    std::vector<char> buffer(length + 1, 0);
+    if (httpd_req_get_hdr_value_str(req, name, buffer.data(), buffer.size()) != ESP_OK) {
+        return false;
+    }
+    value.assign(buffer.data(), length);
+    return true;
+}
+
+static bool webui_session_cookie_valid(httpd_req_t *req)
+{
+    std::string cookies;
+    if (!webui_get_header(req, "Cookie", WEBUI_COOKIE_HEADER_MAX, cookies)) {
+        return false;
+    }
+    const std::string marker = std::string(WEBUI_SESSION_COOKIE) + "=";
+    size_t cursor = 0;
+    while (cursor < cookies.length()) {
+        while (cursor < cookies.length() && (cookies[cursor] == ' ' || cookies[cursor] == ';')) {
+            cursor++;
+        }
+        size_t end = cookies.find(';', cursor);
+        if (end == std::string::npos) {
+            end = cookies.length();
+        }
+        const std::string item = cookies.substr(cursor, end - cursor);
+        if (item.rfind(marker, 0) == 0 &&
+                webui_secure_equal(item.substr(marker.length()), webui_session_token)) {
+            return true;
+        }
+        cursor = end + 1;
+    }
+    return false;
+}
+
+static void webui_set_session_cookie(httpd_req_t *req)
+{
+    // ESP-IDF stores the header value pointer until the response body begins,
+    // so this must refer to process-lifetime storage rather than a local string.
+    const std::string &cookie = webui_server_uses_tls ?
+                                webui_session_cookie_https : webui_session_cookie_http;
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie.c_str());
+}
+
+static bool webui_authenticate_request(httpd_req_t *req)
+{
+    if (webui_session_cookie_valid(req)) {
+        return true;
+    }
+
+    std::string authorization;
+    if (webui_get_header(req, "Authorization", WEBUI_AUTH_HEADER_MAX, authorization) &&
+            webui_secure_equal(authorization, webui_basic_authorization)) {
+        webui_set_session_cookie(req);
+        return true;
+    }
+
+    std::string ip;
+    hal_get_socket_client_ip(httpd_req_to_sockfd(req), ip);
+    ESP_LOGW(TAG, "Rejecting unauthenticated request from '%s'", ip.c_str());
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"AD2IoT\", charset=\"UTF-8\"");
+    httpd_resp_send(req, "Authentication required", HTTPD_RESP_USE_STRLEN);
+    return false;
+}
+
+static bool webui_authorize_request(httpd_req_t *req)
+{
+    return webui_request_allowed(req) && webui_authenticate_request(req);
+}
+
+static bool webui_origin_allowed(httpd_req_t *req)
+{
+    std::string origin;
+    if (!webui_get_header(req, "Origin", 192, origin)) {
+        // Non-browser clients commonly omit Origin. Browser WebSocket and fetch
+        // requests include it, so reject any cross-origin browser request below.
+        return true;
+    }
+    std::string host;
+    if (!webui_get_header(req, "Host", 128, host)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Missing request host");
+        return false;
+    }
+    const std::string expected = std::string(webui_server_uses_tls ? "https://" : "http://") + host;
+    if (webui_secure_equal(origin, expected)) {
+        return true;
+    }
+    ESP_LOGW(TAG, "Rejecting cross-origin Web UI request");
+    httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Cross-origin request denied");
+    return false;
+}
+
 #if CONFIG_HTTPD_WS_SUPPORT
 /**
  * @brief Send current alarm state to web socket connection. Lookup
@@ -406,11 +584,26 @@ static esp_err_t webui_ws_error(httpd_req_t *req, const char *message)
  */
 esp_err_t ad2ws_handler(httpd_req_t *req)
 {
+    if (req->method == HTTP_GET) {
+        if (!webui_authorize_request(req) || !webui_origin_allowed(req)) {
+            return ESP_FAIL;
+        }
+        req->sess_ctx = calloc(1, sizeof(ws_session_storage));
+        req->free_ctx = free_ws_session_storage;
+        if (!req->sess_ctx) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                       "Unable to allocate WebSocket session");
+        }
+        ((ws_session_storage *)req->sess_ctx)->authenticated = true;
+        return ESP_OK;
+    }
+
     if (!webui_request_allowed(req)) {
         return ESP_FAIL;
     }
-    if (req->method == HTTP_GET) {
-        return ESP_OK;
+    ws_session_storage *session = (ws_session_storage *)req->sess_ctx;
+    if (!session || !session->authenticated) {
+        return webui_ws_error(req, "Authenticated session required");
     }
 
     httpd_ws_frame_t ws_pkt;
@@ -456,16 +649,9 @@ esp_err_t ad2ws_handler(httpd_req_t *req)
                 return webui_ws_error(req, "Invalid code slot");
             }
 
-            /* Create session's context if not already available */
-            if (!req->sess_ctx) {
-                req->sess_ctx = malloc(sizeof(ws_session_storage));  /*!< Pointer to context data */
-                req->free_ctx = free_ws_session_storage;             /*!< Function to free context data */
-                if (!req->sess_ctx) {
-                    return webui_ws_error(req, "Unable to allocate session");
-                }
-            }
-            ((ws_session_storage *)req->sess_ctx)->codeID = (int)codeID;
-            ((ws_session_storage *)req->sess_ctx)->partID = (int)partID;
+            session->codeID = (int)codeID;
+            session->partID = (int)partID;
+            session->synced = true;
 
             // trigger an async send using httpd_queue_work
             return httpd_queue_work(req->handle, ws_alarmstate_async_send, (void *)httpd_req_to_sockfd(req));
@@ -493,12 +679,12 @@ esp_err_t ad2ws_handler(httpd_req_t *req)
 
         std::string key_send = "!SEND:";
         if(message.rfind(key_send, 0) == 0) {
-            if (!req->sess_ctx) {
+            if (!session->synced) {
                 return webui_ws_error(req, "SYNC is required before commands");
             }
             std::string sendbuf = message.substr(key_send.length());
-            int codeID = ((ws_session_storage *)req->sess_ctx)->codeID;
-            int partID = ((ws_session_storage *)req->sess_ctx)->partID;
+            int codeID = session->codeID;
+            int partID = session->partID;
 
             if (sendbuf == "<DISARM>") {
                 ad2_disarm(codeID, partID);
@@ -628,7 +814,7 @@ static void webui_tls_session_callback(esp_https_server_user_cb_arg_t *arg)
 /** Read-only current state API: GET /api/state?partition=0 */
 static esp_err_t webui_state_handler(httpd_req_t *req)
 {
-    if (!webui_request_allowed(req)) {
+    if (!webui_authorize_request(req)) {
         return ESP_FAIL;
     }
     int partID = webui_query_int(req, "partition", 0);
@@ -642,7 +828,7 @@ static esp_err_t webui_state_handler(httpd_req_t *req)
 /** Reboot-scoped activity API: GET /api/history?limit=64&partition=1 */
 static esp_err_t webui_history_handler(httpd_req_t *req)
 {
-    if (!webui_request_allowed(req)) {
+    if (!webui_authorize_request(req)) {
         return ESP_FAIL;
     }
     int limit = webui_query_int(req, "limit", WEBUI_HISTORY_SIZE);
@@ -666,7 +852,7 @@ static void webui_add_file_status(cJSON *parent, const char *name, const char *p
 /** Build, network, storage, and runtime status: GET /api/system */
 static esp_err_t webui_system_handler(httpd_req_t *req)
 {
-    if (!webui_request_allowed(req)) {
+    if (!webui_authorize_request(req)) {
         return ESP_FAIL;
     }
     cJSON *root = cJSON_CreateObject();
@@ -760,7 +946,7 @@ static esp_err_t webui_system_handler(httpd_req_t *req)
 /** SD-card firmware availability and integrity: GET /api/firmware */
 static esp_err_t webui_firmware_handler(httpd_req_t *req)
 {
-    if (!webui_request_allowed(req)) {
+    if (!webui_authorize_request(req)) {
         return ESP_FAIL;
     }
     cJSON *root = cJSON_CreateObject();
@@ -808,7 +994,10 @@ static esp_err_t webui_action_response(httpd_req_t *req, const char *action, con
 /** Explicit maintenance action with a custom-header CSRF guard: POST /api/action */
 static esp_err_t webui_action_handler(httpd_req_t *req)
 {
-    if (!webui_request_allowed(req)) {
+    if (!webui_authorize_request(req)) {
+        return ESP_FAIL;
+    }
+    if (!webui_origin_allowed(req)) {
         return ESP_FAIL;
     }
     char guard[16] = {0};
@@ -1038,7 +1227,7 @@ static bool webui_load_tls_material(std::string &certificate, std::string &priva
 /** Redacted configuration text: GET /api/config?source=active|spiffs|sd */
 static esp_err_t webui_config_handler(httpd_req_t *req)
 {
-    if (!webui_request_allowed(req)) {
+    if (!webui_authorize_request(req)) {
         return ESP_FAIL;
     }
     std::string source;
@@ -1075,7 +1264,7 @@ static esp_err_t webui_config_handler(httpd_req_t *req)
 /** Bounded reboot-scoped device log: GET /api/logs?limit=64 */
 static esp_err_t webui_logs_handler(httpd_req_t *req)
 {
-    if (!webui_request_allowed(req)) {
+    if (!webui_authorize_request(req)) {
         return ESP_FAIL;
     }
     int limit = webui_query_int(req, "limit", 64);
@@ -1108,9 +1297,14 @@ static esp_err_t webui_logs_handler(httpd_req_t *req)
 esp_err_t file_get_handler(httpd_req_t *req)
 {
 
-    if (!webui_request_allowed(req)) {
+    if (!webui_authorize_request(req)) {
         return ESP_FAIL;
     }
+    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
+    httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
+    httpd_resp_set_hdr(req, "Content-Security-Policy",
+                       "default-src 'self'; connect-src 'self' ws: wss:; "
+                       "img-src 'self' data:; object-src 'none'; frame-ancestors 'none'");
 
     // state: send raw file or process as template
     bool apply_template = false;
@@ -1568,8 +1762,18 @@ static void _cli_cmd_webui_event(const char *string)
              */
             case WEBUI_SUBCMD_ENABLE_ID:
                 if (ad2_copy_nth_arg(arg, string, 2) >= 0) {
-                    ad2_set_config_key_bool(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_ENABLE, (arg[0] == 'Y' || arg[0] ==  'y'));
-                    ad2_printf_host(false, "Success setting value. Restart required to take effect.\r\n");
+                    const bool requested = (arg[0] == 'Y' || arg[0] == 'y');
+                    std::string configured_user;
+                    std::string configured_password;
+                    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_USER, configured_user);
+                    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_PASSWORD,
+                                              configured_password);
+                    if (requested && !webui_valid_credentials(configured_user, configured_password)) {
+                        ad2_printf_host(false, "Set a valid Web UI user and password before enabling.\r\n");
+                    } else {
+                        ad2_set_config_key_bool(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_ENABLE, requested);
+                        ad2_printf_host(false, "Success setting value. Restart required to take effect.\r\n");
+                    }
                 }
 
                 {
@@ -1633,6 +1837,46 @@ static void _cli_cmd_webui_event(const char *string)
                     ad2_printf_host(false, "WebUI '%s' path is '%s'.\r\n", key, saved.c_str());
                 }
                 break;
+            case WEBUI_SUBCMD_USER_ID:
+                if (ad2_copy_nth_arg(arg, string, 2) >= 0) {
+                    if (arg == "-") {
+                        arg.clear();
+                    }
+                    if (!arg.empty() &&
+                            !webui_valid_credentials(arg, std::string(WEBUI_AUTH_PASSWORD_MIN, 'x'))) {
+                        ad2_printf_host(false, "User must be 1-32 printable characters without spaces or ':'. Not saved.\r\n");
+                    } else {
+                        ad2_set_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_USER, arg.c_str());
+                        ad2_printf_host(false, "Web UI user updated. Restart required to take effect.\r\n");
+                    }
+                }
+                {
+                    std::string configured_user;
+                    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_USER, configured_user);
+                    ad2_printf_host(false, "Web UI user is '%s'.\r\n",
+                                    configured_user.empty() ? "Not configured" : "Configured");
+                }
+                break;
+            case WEBUI_SUBCMD_PASSWORD_ID:
+                if (ad2_copy_nth_arg(arg, string, 2, true) >= 0) {
+                    if (arg == "-") {
+                        arg.clear();
+                    }
+                    if (!arg.empty() && !webui_valid_credentials("user", arg)) {
+                        ad2_printf_host(false, "Password must be 12-64 printable characters. Not saved.\r\n");
+                    } else {
+                        ad2_set_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_PASSWORD, arg.c_str());
+                        ad2_printf_host(false, "Web UI password updated. Restart required to take effect.\r\n");
+                    }
+                }
+                {
+                    std::string configured_password;
+                    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_PASSWORD,
+                                              configured_password);
+                    ad2_printf_host(false, "Web UI password is '%s'.\r\n",
+                                    configured_password.empty() ? "Not configured" : "Configured");
+                }
+                break;
             default:
                 break;
             }
@@ -1658,12 +1902,16 @@ static struct cli_command webui_cmd_list[] = {
         "    sslcert [path|-]        PEM full-chain path beneath /sdcard\r\n"
         "    sslkey [path|-]         PEM private-key path beneath /sdcard\r\n"
         "                            use - to restore default paths\r\n"
+        "    user [name|-]           Set user; use - to clear\r\n"
+        "    password [value|-]      Set 12-64 character password; use - to clear\r\n"
         "Examples:\r\n"
-        "    ```webui enable Y```\r\n"
         "    ```webui acl 192.168.0.0/28,192.168.1.0-192.168.1.10,192.168.3.4```\r\n"
         "    ```webui sslcert certs/fullchain.pem```\r\n"
         "    ```webui sslkey certs/privkey.pem```\r\n"
+        "    ```webui user alarmadmin```\r\n"
+        "    ```webui password use-a-long-unique-password```\r\n"
         "    ```webui ssl Y```\r\n"
+        "    ```webui enable Y```\r\n"
         , _cli_cmd_webui_event
     }
 };
@@ -1685,7 +1933,7 @@ void webui_register_cmds()
  */
 void webui_init(void)
 {
-    bool en = -1;
+    bool en = false;
     ad2_get_config_key_bool(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_ENABLE, &en);
 
     // nothing more needs to be done once commands are set if not enabled.
@@ -1694,25 +1942,35 @@ void webui_init(void)
         return;
     }
 
+    if (!webui_load_credentials()) {
+        ESP_LOGE(TAG, "Web UI credentials are missing or invalid; refusing to start");
+        ad2_printf_host(true, "%s: set a 1-32 character user and 12-64 character password before enabling.",
+                        TAG);
+        return;
+    }
+
     ad2_get_config_key_bool(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_SSL, &webui_tls_enabled);
     ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_SSLCERT, webui_tls_cert_setting);
     ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_SSLKEY, webui_tls_key_setting);
+
+    // Load and parse the ACL. Missing configuration is loopback-only.
+    std::string acl = WEBUI_DEFAULT_ACL;
+
+    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_ACL, acl);
+    if (acl.empty()) {
+        ESP_LOGE(TAG, "Web UI ACL is empty; refusing to start");
+        return;
+    }
+    int acl_result = webui_acl.add(acl);
+    if (acl_result != webui_acl.ACL_FORMAT_OK) {
+        ESP_LOGE(TAG, "ACL parse error %i for '%s'; refusing to start", acl_result, acl.c_str());
+        return;
+    }
 
     webui_history_mutex = xSemaphoreCreateMutex();
     if (!webui_history_mutex) {
         ESP_LOGE(TAG, "Unable to allocate activity history mutex");
         return;
-    }
-
-    // load and parse ACL if set or set default to allow all.
-    std::string acl = WEBUI_DEFAULT_ACL;
-
-    ad2_get_config_key_string(WEBUI_CONFIG_SECTION, WEBUI_SUBCMD_ACL, acl);
-    if (acl.length()) {
-        int res = webui_acl.add(acl);
-        if (res != webui_acl.ACL_FORMAT_OK) {
-            ESP_LOGW(TAG, "ACL parse error %i for '%s'", res, acl.c_str());
-        }
     }
 
     // Subscribe to AlarmDecoder events

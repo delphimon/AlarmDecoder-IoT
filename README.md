@@ -146,9 +146,11 @@ Network CLI diagnostics have important limits: the TCP session depends on the sa
       - ```ftpd password use-a-long-unique-password```
       - ```ftpd acl 192.168.1.0/24```
       - ```ftpd enable Y```
-    - Enable webui daemon and configure the ACL.
-      - ```webui enable Y```
+    - Configure Web UI credentials and the ACL, then enable the daemon.
+      - ```webui user alarmadmin```
+      - ```webui password use-a-long-unique-password```
       - ```webui acl 192.168.1.0/24```
+      - ```webui enable Y```
       - Insert a uSD card formatted fat32 with the files in the ```/contrib/webUI/flash-drive/``` folder of this project in the root directory.
     - Restart for these changes to be saved and take effect.
       - ```restart```
@@ -540,7 +542,7 @@ acl = 192.168.0.0/16, 10.10.0.0/16
 ```
 
 ###  5.3. <a name='web-user-interface-webui-component'></a>Web User Interface webUI component
-This component provides a responsive HTML5+WebSocket dashboard with real-time alarm and keypad display state, system health indicators, active-zone details, quick controls, a 64-event activity history with relative and exact client-local timestamps, and a full virtual keypad. Settings includes SD firmware validation plus confirmed install/restart actions. Panic buttons require pressing the button three times within 3 seconds to help prevent false alarms.<br>
+This component provides an authenticated responsive HTML5+WebSocket dashboard with real-time alarm and keypad display state, system health indicators, active-zone details, quick controls, a 64-event activity history with relative and exact client-local timestamps, and a full virtual keypad. Settings includes SD firmware validation plus confirmed install/restart actions. Panic buttons require pressing the button three times within 3 seconds to help prevent false alarms.<br>
 <img src="contrib/webUI/EXAMPLE-PANEL-READY.jpg" width="200">
 
 ####  5.3.1. <a name='configuration-for-webui-server'></a>Configuration tool for webUI server
@@ -556,23 +558,33 @@ Commands:
     sslcert [path|-]        PEM full-chain path beneath /sdcard
     sslkey [path|-]         PEM private-key path beneath /sdcard
                             use - to restore default paths
+    user [name|-]           Set user; use - to clear
+    password [value|-]      Set 12-64 character password; use - to clear
 Examples:
-    ```webui enable Y```
     ```webui acl 192.168.0.0/28,192.168.1.0-192.168.1.10,192.168.3.4```
     ```webui sslcert certs/fullchain.pem```
     ```webui sslkey certs/privkey.pem```
+    ```webui user alarmadmin```
+    ```webui password use-a-long-unique-password```
     ```webui ssl Y```
+    ```webui enable Y```
 ```
 ```console
 # Example config file ini setting
 [webui]
 enable = true
 acl = 192.168.0.0/16, 10.10.0.0/16
+user = alarmadmin
+password = replace-with-a-long-unique-password
 ssl = true
 sslcert = certs/fullchain.pem
 sslkey = certs/privkey.pem
 ```
-HTTPS is opt-in and listens on port 443. Copy the PEM certificate chain and unencrypted private key onto the SD card at `/certs/fullchain.pem` and `/certs/privkey.pem`, or configure different paths beneath `/sdcard`. The standard Let's Encrypt `fullchain.pem` and `privkey.pem` files are supported. FAT32 does not preserve Certbot symlinks, so copy the target file contents. Restart the AD2IoT after enabling HTTPS or replacing renewed certificates. If HTTPS is enabled but either PEM file is unavailable or invalid, the Web UI fails closed instead of falling back to HTTP. HTTPS is limited to two simultaneous client sockets because each ESP-IDF TLS socket can consume roughly 40 KiB. The browser reserves one for WSS and serializes all REST operations through the other. Settings reports the last reset cause, current/minimum heap, largest free block, and TLS session count; the serial log also records heap values when TLS sessions open and close.
+The Web UI is disabled by default, ships without credentials, and refuses to start until a 1-32 character user and 12-64 character password are configured. The browser uses HTTP Basic authentication to establish a random, reboot-scoped `HttpOnly`/`SameSite=Strict` session; static files, diagnostics, REST maintenance actions, and WSS panel commands all require that session. Cross-origin browser command requests are rejected. There is one operator account and no role separation. Change the password and restart the device to revoke existing sessions.
+
+Basic credentials are readable by anyone able to observe plain HTTP traffic, so HTTPS is strongly recommended even on a private management network. HTTPS is opt-in and listens on port 443. Copy the PEM certificate chain and unencrypted private key onto the SD card at `/certs/fullchain.pem` and `/certs/privkey.pem`, or configure different paths beneath `/sdcard`. The standard Let's Encrypt `fullchain.pem` and `privkey.pem` files are supported. FAT32 does not preserve Certbot symlinks, so copy the target file contents. Restart the AD2IoT after enabling HTTPS or replacing renewed certificates. If HTTPS is enabled but either PEM file is unavailable or invalid, the Web UI fails closed instead of falling back to HTTP. HTTPS is limited to two simultaneous client sockets because each ESP-IDF TLS socket can consume roughly 40 KiB. The browser reserves one for WSS and serializes all REST operations through the other. Settings reports the last reset cause, current/minimum heap, largest free block, and TLS session count; the serial log also records heap values when TLS sessions open and close.
+
+Upgrades from `AD2IOT-1112` or earlier need credentials added to the active `ad2iot.ini`, or configured after the upgrade through serial or the already-enabled network CLI. Until valid credentials exist, the new firmware deliberately leaves the Web UI stopped. Avoid entering or storing the password over an untrusted network CLI or FTP connection because those management protocols are not encrypted.
 
 ###  5.4. <a name='smartthings-direct-connected-device.'></a>SmartThings Direct Connected device.
 ###### ```Only available in stsdk firmware build```
@@ -909,7 +921,7 @@ The firmware version is sourced from `version.txt`. Bump that value for every co
 
 1. Bump `version.txt`, update `CHANGELOG.md`, complete validation, and push the release commit to `master`.
 2. Open [Draft a new release](https://github.com/delphimon/AlarmDecoder-IoT/releases/new).
-3. Create or select a tag whose name exactly matches `version.txt` (for example, `AD2IOT-1112`) and target the release commit on `master`.
+3. Create or select a tag whose name exactly matches `version.txt` (for example, `AD2IOT-1113`) and target the release commit on `master`.
 4. Select **Generate release notes**, review the comparison range, and publish the release. Saving a draft does not start the build; the workflow starts when the release is published.
 5. The `Publish firmware release` workflow validates the repository, runs host tests, builds firmware and SPIFFS from the tagged commit, creates the checksummed package, and attaches `<version>-esp32-poe-iso-webui.zip` to the release.
 

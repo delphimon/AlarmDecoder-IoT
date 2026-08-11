@@ -73,7 +73,10 @@ jobs:
 
       - name: Build esp32-poe-iso firmware and SPIFFS image
         run: |
-          pio run -e esp32-poe-iso
+          set -o pipefail
+          pio run -e esp32-poe-iso 2>&1 | tee firmware-build.log
+          python tools/ci/check_firmware_size.py firmware-build.log
+          python tools/ci/verify_firmware_identity.py .pio/build/esp32-poe-iso/firmware.bin
           pio run -e esp32-poe-iso -t buildfs
 
       - name: Package and checksum release files

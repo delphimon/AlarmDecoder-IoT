@@ -154,7 +154,7 @@
 
   async function fetchSystem() {
     return queueRequest(async () => {
-      const response = await fetch(apiURL("/api/system"), { cache: "no-store" });
+      const response = await fetch(apiURL("/api/system"), { cache: "no-store", credentials: "same-origin" });
       if (!response.ok) throw new Error("System status unavailable");
       const system = await response.json();
       renderSystem(system);
@@ -164,7 +164,9 @@
 
   async function fetchConfig(source) {
     return queueRequest(async () => {
-      const response = await fetch(apiURL("/api/config?source=" + encodeURIComponent(source)), { cache: "no-store" });
+      const response = await fetch(apiURL("/api/config?source=" + encodeURIComponent(source)), {
+        cache: "no-store", credentials: "same-origin"
+      });
       if (response.status === 404) return "Not available on this device.";
       if (!response.ok) throw new Error("Unable to load " + source + " configuration");
       return response.text();
@@ -173,7 +175,7 @@
 
   async function fetchLogs() {
     return queueRequest(async () => {
-      const response = await fetch(apiURL("/api/logs?limit=64"), { cache: "no-store" });
+      const response = await fetch(apiURL("/api/logs?limit=64"), { cache: "no-store", credentials: "same-origin" });
       if (!response.ok) throw new Error("Device logs unavailable");
       const payload = await response.json();
       const items = Array.isArray(payload.items) ? payload.items : [];
@@ -215,7 +217,7 @@
 
   async function fetchFirmware() {
     return queueRequest(async () => {
-      const response = await fetch(apiURL("/api/firmware"), { cache: "no-store" });
+      const response = await fetch(apiURL("/api/firmware"), { cache: "no-store", credentials: "same-origin" });
       if (!response.ok) throw new Error("SD firmware status unavailable");
       const firmware = await response.json();
       renderFirmware(firmware);
@@ -498,6 +500,7 @@
         const response = await fetch(apiURL("/api/action"), {
           method: "POST",
           cache: "no-store",
+          credentials: "same-origin",
           headers: {
             "Content-Type": "application/json",
             "X-AD2IoT-Action": action
