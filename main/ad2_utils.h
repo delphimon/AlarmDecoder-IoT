@@ -186,7 +186,6 @@ void ad2_set_config_key_string(
 // persistent configuration load/save
 void ad2_load_persistent_config();
 void ad2_save_persistent_config();
-bool ad2_get_config_snapshot(std::string &config, bool *using_sd = nullptr);
 bool ad2_config_uses_sd();
 
 // ASYNC serialized http request api for components.

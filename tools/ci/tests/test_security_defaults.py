@@ -84,6 +84,23 @@ class SecurityDefaultsTests(unittest.TestCase):
             prologue = self.webui_source[start : start + 300]
             self.assertIn("webui_authorize_request(req)", prologue, handler)
 
+    def test_webui_http_rejections_flush_the_error_response(self) -> None:
+        handlers = (
+            "webui_state_handler",
+            "webui_history_handler",
+            "webui_system_handler",
+            "webui_firmware_handler",
+            "webui_action_handler",
+            "webui_config_handler",
+            "webui_logs_handler",
+            "file_get_handler",
+        )
+        for handler in handlers:
+            start = self.webui_source.index(f"{handler}(httpd_req_t *req)")
+            prologue = self.webui_source[start : start + 300]
+            auth_branch = prologue[prologue.index("webui_authorize_request(req)") :]
+            self.assertIn("return ESP_OK;", auth_branch, handler)
+
     def test_websocket_commands_require_an_authenticated_session(self) -> None:
         handler = self.webui_source[
             self.webui_source.index("esp_err_t ad2ws_handler") :
@@ -110,6 +127,35 @@ class SecurityDefaultsTests(unittest.TestCase):
         setter = self.webui_source[setter_start : setter_start + 700]
         self.assertIn("webui_session_cookie_https", setter)
         self.assertNotIn("std::string cookie =", setter)
+
+    def test_config_redaction_is_in_place_and_scrubs_reused_secrets(self) -> None:
+        start = self.webui_source.index("static void webui_redact_config")
+        redactor = self.webui_source[
+            start : self.webui_source.index("static bool webui_read_file", start)
+        ]
+        self.assertIn("contents.replace", redactor)
+        self.assertIn("sensitive_values.push_back(value)", redactor)
+        self.assertIn("contents.find(value", redactor)
+        self.assertNotIn("std::string output", redactor)
+
+    def test_active_config_uses_the_bounded_boot_source_file(self) -> None:
+        start = self.webui_source.index("static esp_err_t webui_config_handler")
+        handler = self.webui_source[start : start + 2200]
+        self.assertIn('source == "active"', handler)
+        self.assertIn("ad2_config_uses_sd()", handler)
+        self.assertIn("webui_send_redacted_config_file", handler)
+        self.assertNotIn("ad2_get_config_snapshot", handler)
+
+    def test_config_files_are_redacted_and_sent_in_bounded_chunks(self) -> None:
+        start = self.webui_source.index("static esp_err_t webui_send_redacted_config_file")
+        streamer = self.webui_source[
+            start : self.webui_source.index("static bool webui_resolve_sd_path", start)
+        ]
+        self.assertIn("webui_read_config_line", streamer)
+        self.assertIn("webui_collect_sensitive_config_value", streamer)
+        self.assertIn("webui_scrub_sensitive_values", streamer)
+        self.assertIn("httpd_resp_send_chunk", streamer)
+        self.assertNotIn("std::string config", streamer)
 
     def test_browser_rest_requests_send_same_origin_credentials(self) -> None:
         app = (ROOT / "contrib" / "webUI" / "flash-drive" / "www" / "app.js").read_text(

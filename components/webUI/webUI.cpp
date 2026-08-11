@@ -29,6 +29,7 @@
 static const char *TAG = "WEBUI";
 
 // AlarmDecoder std includes
+#include <algorithm>
 #include "alarmdecoder_main.h"
 
 // esp component includes
@@ -67,6 +68,7 @@ static const char *TAG = "WEBUI";
 #define WEBUI_HISTORY_SIZE 64
 #define WEBUI_WS_MAX_PAYLOAD 256
 #define WEBUI_CONFIG_MAX_BYTES (64 * 1024)
+#define WEBUI_CONFIG_LINE_MAX 1024
 #define WEBUI_DEFAULT_SSL_CERT "certs/fullchain.pem"
 #define WEBUI_DEFAULT_SSL_KEY  "certs/privkey.pem"
 #define WEBUI_AUTH_USER_MAX 32
@@ -815,7 +817,7 @@ static void webui_tls_session_callback(esp_https_server_user_cb_arg_t *arg)
 static esp_err_t webui_state_handler(httpd_req_t *req)
 {
     if (!webui_authorize_request(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     int partID = webui_query_int(req, "partition", 0);
     if (partID < 0 || partID > AD2_MAX_PARTITION) {
@@ -829,7 +831,7 @@ static esp_err_t webui_state_handler(httpd_req_t *req)
 static esp_err_t webui_history_handler(httpd_req_t *req)
 {
     if (!webui_authorize_request(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     int limit = webui_query_int(req, "limit", WEBUI_HISTORY_SIZE);
     int partition = webui_query_int(req, "partition", -1);
@@ -853,7 +855,7 @@ static void webui_add_file_status(cJSON *parent, const char *name, const char *p
 static esp_err_t webui_system_handler(httpd_req_t *req)
 {
     if (!webui_authorize_request(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     cJSON *root = cJSON_CreateObject();
     const esp_app_desc_t *app = esp_app_get_description();
@@ -947,7 +949,7 @@ static esp_err_t webui_system_handler(httpd_req_t *req)
 static esp_err_t webui_firmware_handler(httpd_req_t *req)
 {
     if (!webui_authorize_request(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "installed_version", ad2_firmware_version());
@@ -995,10 +997,10 @@ static esp_err_t webui_action_response(httpd_req_t *req, const char *action, con
 static esp_err_t webui_action_handler(httpd_req_t *req)
 {
     if (!webui_authorize_request(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     if (!webui_origin_allowed(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     char guard[16] = {0};
     const size_t guard_length = httpd_req_get_hdr_value_len(req, "X-AD2IoT-Action");
@@ -1097,19 +1099,18 @@ static void webui_redact_inline_value(std::string &line, const char *name)
     }
 }
 
-static std::string webui_redact_config(const std::string &input)
+static void webui_redact_config(std::string &contents)
 {
-    std::string output;
-    output.reserve(input.length());
     std::string section;
+    std::vector<std::string> sensitive_values;
     size_t cursor = 0;
-    while (cursor < input.length()) {
-        size_t end = input.find('\n', cursor);
+    while (cursor < contents.length()) {
+        size_t end = contents.find('\n', cursor);
         const bool has_newline = end != std::string::npos;
         if (!has_newline) {
-            end = input.length();
+            end = contents.length();
         }
-        std::string line = input.substr(cursor, end - cursor);
+        std::string line = contents.substr(cursor, end - cursor);
         std::string parsed = line;
         ad2_trim(parsed);
         while (!parsed.empty() && (parsed[0] == '#' || parsed[0] == ';')) {
@@ -1127,6 +1128,14 @@ static std::string webui_redact_config(const std::string &input)
                 ad2_lcase(key);
                 ad2_trim(key);
                 if (webui_sensitive_key(section, key)) {
+                    std::string value = parsed.substr(equals + 1);
+                    ad2_trim(value);
+                    // Scrub a configured secret wherever it is reused under a
+                    // less descriptive key. Very short values are skipped to
+                    // avoid making the diagnostic snapshot unreadable.
+                    if (value.length() >= 4) {
+                        sensitive_values.push_back(value);
+                    }
                     const size_t original_equals = line.find('=');
                     if (original_equals != std::string::npos) {
                         line.erase(original_equals + 1);
@@ -1145,13 +1154,82 @@ static std::string webui_redact_config(const std::string &input)
         if (at != std::string::npos) {
             line.replace(scheme + 3, at - (scheme + 3), "[redacted]");
         }
-        output += line;
-        if (has_newline) {
-            output += '\n';
-        }
-        cursor = end + (has_newline ? 1 : 0);
+        contents.replace(cursor, end - cursor, line);
+        cursor += line.length() + (has_newline ? 1 : 0);
     }
-    return output;
+
+    for (const std::string &value : sensitive_values) {
+        size_t match = 0;
+        while ((match = contents.find(value, match)) != std::string::npos) {
+            contents.replace(match, value.length(), "[redacted]");
+            match += strlen("[redacted]");
+        }
+    }
+}
+
+static int webui_read_config_line(FILE *file, std::string &line)
+{
+    char chunk[256];
+    line.clear();
+    while (fgets(chunk, sizeof(chunk), file)) {
+        const size_t count = strlen(chunk);
+        line.append(chunk, count);
+        if (line.length() > WEBUI_CONFIG_LINE_MAX) {
+            return -1;
+        }
+        if ((count > 0 && chunk[count - 1] == '\n') || count < sizeof(chunk) - 1) {
+            return 1;
+        }
+    }
+    if (ferror(file)) {
+        return -1;
+    }
+    return line.empty() ? 0 : 1;
+}
+
+static void webui_collect_sensitive_config_value(const std::string &line,
+        std::string &section, std::vector<std::string> &values)
+{
+    std::string parsed = line;
+    ad2_trim(parsed);
+    while (!parsed.empty() && (parsed[0] == '#' || parsed[0] == ';')) {
+        parsed.erase(0, 1);
+        ad2_trim(parsed);
+    }
+    if (parsed.length() > 2 && parsed.front() == '[' && parsed.back() == ']') {
+        section = parsed.substr(1, parsed.length() - 2);
+        ad2_lcase(section);
+        ad2_trim(section);
+        return;
+    }
+    const size_t equals = parsed.find('=');
+    if (equals == std::string::npos) {
+        return;
+    }
+    std::string key = parsed.substr(0, equals);
+    ad2_lcase(key);
+    ad2_trim(key);
+    if (!webui_sensitive_key(section, key)) {
+        return;
+    }
+    std::string value = parsed.substr(equals + 1);
+    ad2_trim(value);
+    if (value.length() >= 4 &&
+            std::find(values.begin(), values.end(), value) == values.end()) {
+        values.push_back(value);
+    }
+}
+
+static void webui_scrub_sensitive_values(std::string &line,
+        const std::vector<std::string> &values)
+{
+    for (const std::string &value : values) {
+        size_t match = 0;
+        while ((match = line.find(value, match)) != std::string::npos) {
+            line.replace(match, value.length(), "[redacted]");
+            match += strlen("[redacted]");
+        }
+    }
 }
 
 static bool webui_read_file(const char *path, std::string &contents)
@@ -1175,6 +1253,54 @@ static bool webui_read_file(const char *path, std::string &contents)
     const bool ok = !ferror(file);
     fclose(file);
     return ok;
+}
+
+static esp_err_t webui_send_redacted_config_file(httpd_req_t *req, const char *path,
+        const char *source_name)
+{
+    struct stat info;
+    if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) ||
+            info.st_size < 0 || info.st_size > WEBUI_CONFIG_MAX_BYTES) {
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+                                   "Configuration is not available");
+    }
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+                                   "Configuration is not available");
+    }
+
+    std::vector<std::string> sensitive_values;
+    sensitive_values.reserve(16);
+    std::string section;
+    std::string line;
+    int line_status;
+    while ((line_status = webui_read_config_line(file, line)) > 0) {
+        webui_collect_sensitive_config_value(line, section, sensitive_values);
+    }
+    if (line_status < 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "Configuration contains an oversized or unreadable line");
+    }
+
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "X-Config-Source", source_name);
+    while ((line_status = webui_read_config_line(file, line)) > 0) {
+        webui_redact_config(line);
+        webui_scrub_sensitive_values(line, sensitive_values);
+        const esp_err_t result = httpd_resp_send_chunk(req, line.c_str(), line.length());
+        if (result != ESP_OK) {
+            fclose(file);
+            return result;
+        }
+    }
+    fclose(file);
+    if (line_status < 0) {
+        return ESP_FAIL;
+    }
+    return httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 static bool webui_resolve_sd_path(const std::string &setting, std::string &path)
@@ -1228,44 +1354,42 @@ static bool webui_load_tls_material(std::string &certificate, std::string &priva
 static esp_err_t webui_config_handler(httpd_req_t *req)
 {
     if (!webui_authorize_request(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     std::string source;
     if (!webui_query_value(req, "source", source)) {
         source = "active";
     }
     ad2_lcase(source);
-    std::string config;
-    bool ok = false;
+    const char *config_path = nullptr;
     const char *source_name = nullptr;
     if (source == "active") {
-        bool using_sd = false;
-        ok = ad2_get_config_snapshot(config, &using_sd);
-        source_name = using_sd ? "SD card (active)" : "SPIFFS (active)";
+        const bool using_sd = ad2_config_uses_sd();
+        config_path = using_sd ? "/" AD2_USD_MOUNT_POINT AD2_CONFIG_FILE :
+                      "/" AD2_SPIFFS_MOUNT_POINT AD2_CONFIG_FILE;
+        source_name = using_sd ? "SD card (active boot source)" :
+                      "SPIFFS (active boot source)";
     } else if (source == "spiffs") {
-        ok = webui_read_file("/" AD2_SPIFFS_MOUNT_POINT AD2_CONFIG_FILE, config);
+        config_path = "/" AD2_SPIFFS_MOUNT_POINT AD2_CONFIG_FILE;
         source_name = "SPIFFS file";
     } else if (source == "sd") {
-        ok = g_uSD_mounted && webui_read_file("/" AD2_USD_MOUNT_POINT AD2_CONFIG_FILE, config);
+        if (!g_uSD_mounted) {
+            return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+                                       "Configuration is not available");
+        }
+        config_path = "/" AD2_USD_MOUNT_POINT AD2_CONFIG_FILE;
         source_name = "SD card file";
     } else {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown configuration source");
     }
-    if (!ok) {
-        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Configuration is not available");
-    }
-    config = webui_redact_config(config);
-    httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "X-Config-Source", source_name);
-    return httpd_resp_send(req, config.c_str(), config.length());
+    return webui_send_redacted_config_file(req, config_path, source_name);
 }
 
 /** Bounded reboot-scoped device log: GET /api/logs?limit=64 */
 static esp_err_t webui_logs_handler(httpd_req_t *req)
 {
     if (!webui_authorize_request(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     int limit = webui_query_int(req, "limit", 64);
     if (limit < 1 || limit > 64) {
@@ -1278,7 +1402,8 @@ static esp_err_t webui_logs_handler(httpd_req_t *req)
     cJSON_ArrayForEach(item, items) {
         cJSON *text = cJSON_GetObjectItem(item, "text");
         if (cJSON_IsString(text) && text->valuestring) {
-            const std::string redacted = webui_redact_config(text->valuestring);
+            std::string redacted = text->valuestring;
+            webui_redact_config(redacted);
             cJSON_SetValuestring(text, redacted.c_str());
         }
     }
@@ -1298,7 +1423,7 @@ esp_err_t file_get_handler(httpd_req_t *req)
 {
 
     if (!webui_authorize_request(req)) {
-        return ESP_FAIL;
+        return ESP_OK;
     }
     httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
     httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");

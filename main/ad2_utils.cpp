@@ -1665,15 +1665,6 @@ void ad2_bypass_zone(int codeId, int partId, uint8_t zone)
     ad2_bypass_zone(code, partId, zone);
 }
 
-bool ad2_get_config_snapshot(std::string &config, bool *using_sd)
-{
-    config.clear();
-    if (using_sd) {
-        *using_sd = _uSD_config;
-    }
-    return _ad2ini.Save(config, false) >= 0;
-}
-
 bool ad2_config_uses_sd()
 {
     return _uSD_config;

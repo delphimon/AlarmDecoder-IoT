@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1116` after repeated config reads showed that AD2IOT-1115's full-file response buffer could still panic under the two-session TLS workload.
+- [x] PERFORMANCE/WEBUI: replace full-buffer active/SPIFFS/SD config responses with a two-pass redacted chunked streamer, bounding each line to 1 KiB and retaining reused-secret scrubbing without holding the 20+ KiB file in heap.
+- [x] TEST/HARDWARE: install AD2IOT-1116 through the validated SD updater and verify authenticated HTTPS/WSS, complete 401 responses, redacted active/SPIFFS/SD configuration, network-CLI logs, and a bounded two-session workload with zero request errors or panics.
+- [x] DOCS: update `PROJECT_REVIEW.md`, `README.md`, and this changelog with the AD2IOT-1116 hardware measurements, remaining high-priority work, and the persisted-active-source limitation.
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1115` after hardware testing showed AD2IOT-1114 still panicked while serializing the in-memory SimpleIni tree under TLS.
+- [x] RELIABILITY/WEBUI: serve the active boot source from its bounded SD/SPIFFS backing file instead of serializing the full in-memory configuration on the HTTPS task; this eliminates the reproduced panic at the cost of excluding unsaved live CLI edits until they are persisted/restarted.
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1114` for the hardware-validated HTTPS diagnostics stabilization build.
+- [x] SECURITY/WEBUI: redact configured secret values wherever they are reused in diagnostic configuration output, and perform redaction in place to avoid duplicating a large plaintext buffer in constrained heap.
+- [x] RELIABILITY/WEBUI: pre-size active configuration snapshots to avoid peak `std::string` reallocations under two live TLS sessions, and return successfully after sending HTTP 401/403 responses so HTTPS clients receive the status instead of a transport reset.
+- [x] TEST/HARDWARE: validate AD2IOT-1113 on Ethernet hardware with a public Let’s Encrypt certificate, authenticated REST/cookie access, state/history/firmware/log/config APIs, SD status, and network-CLI diagnostics; reproduce active-config TLS failure and reused-secret disclosure to drive AD2IOT-1114 fixes.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1113` for the authenticated Web UI remediation build.
 - [x] SECURITY/WEBUI: require a configured operator account for all static files, diagnostics, REST actions, and WebSocket commands; establish a random reboot-scoped HttpOnly/SameSite session after Basic authentication; reject cross-origin browser controls; and add restrictive browser response headers.
 - [x] SECURITY/WEBUI: disable the service by default, ship no credentials, default missing ACLs to loopback, fail closed on missing/invalid credentials or ACLs, and redact the new password setting from configuration/log views.
