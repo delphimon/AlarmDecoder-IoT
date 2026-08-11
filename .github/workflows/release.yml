@@ -36,9 +36,23 @@ jobs:
           FIRMWARE_VERSION: ${{ needs.build.outputs.firmware_version }}
         run: zip -r "${FIRMWARE_VERSION}-esp32-poe-iso-webui.zip" AD2IoT-Release
 
+      - name: Verify release identity
+        env:
+          FIRMWARE_VERSION: ${{ needs.build.outputs.firmware_version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$RELEASE_TAG" != "$FIRMWARE_VERSION" ]; then
+            echo "Release tag '$RELEASE_TAG' does not match firmware version '$FIRMWARE_VERSION'." >&2
+            exit 1
+          fi
+
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
           FIRMWARE_VERSION: ${{ needs.build.outputs.firmware_version }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" "${FIRMWARE_VERSION}-esp32-poe-iso-webui.zip" --clobber
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "${FIRMWARE_VERSION}-esp32-poe-iso-webui.zip" \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"

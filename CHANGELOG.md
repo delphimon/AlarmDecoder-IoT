@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] CI/RELEASE: make website-published GitHub releases reliably attach their binary package by addressing the repository explicitly, and reject tags that do not match the embedded firmware version.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1112`; `version.txt` remains the single runtime version source.
 - [x] CI: repair clean GitHub runner builds by using Python 3.12 and pinning `setuptools` 80.9.0 for the Espressif32 6.4 builder's `pkg_resources` dependency; verify the replacement GitHub run completes successfully.
 - [x] SECURITY/FTPD: disable FTP by default, require a 1-32 character username and 8-64 character password, default missing ACLs to loopback, reject malformed ACLs without replacing the active ACL, and refuse startup unless credentials and ACL are valid.

@@ -38,7 +38,7 @@
 	/vscode-markdown-toc-config -->
 <!-- /vscode-markdown-toc -->
 # AlarmDecoder IoT Network Appliance
- [Latest stable release ![Release Version](https://img.shields.io/github/release/nutechsoftware/AlarmDecoder-IoT.svg?style=plastic) ![Release Date](https://img.shields.io/github/release-date/nutechsoftware/AlarmDecoder-IoT.svg?style=plastic)](https://github.com/nutechsoftware/AlarmDecoder-IoT/releases/latest/) [![.github/workflows/build.yml](https://github.com/nutechsoftware/AlarmDecoder-IoT/actions/workflows/build.yml/badge.svg?branch=master&event=push)](https://github.com/nutechsoftware/AlarmDecoder-IoT/actions/workflows/build.yml)
+ [Latest stable release ![Release Version](https://img.shields.io/github/release/delphimon/AlarmDecoder-IoT.svg?style=plastic) ![Release Date](https://img.shields.io/github/release-date/delphimon/AlarmDecoder-IoT.svg?style=plastic)](https://github.com/delphimon/AlarmDecoder-IoT/releases/latest/) [![.github/workflows/build.yml](https://github.com/delphimon/AlarmDecoder-IoT/actions/workflows/build.yml/badge.svg?branch=master&event=push)](https://github.com/delphimon/AlarmDecoder-IoT/actions/workflows/build.yml)
 
  [Latest development branch ![Development branch](https://img.shields.io/badge/dev-yellow?style=plastic) ![GitHub last commit (branch)](https://img.shields.io/github/last-commit/nutechsoftware/AlarmDecoder-IoT/dev?style=plastic)](https://github.com/nutechsoftware/AlarmDecoder-IoT/tree/dev) [![.github/workflows/build.yml](https://github.com/nutechsoftware/AlarmDecoder-IoT/actions/workflows/build.yml/badge.svg?branch=dev&event=push)](https://github.com/nutechsoftware/AlarmDecoder-IoT/actions/workflows/build.yml)
 
@@ -904,6 +904,16 @@ password = replace-with-a-long-unique-password
 ```
 ##  6. <a name='building-firmware'></a>Building firmware
 The firmware version is sourced from `version.txt`. Bump that value for every complete firmware build intended for distribution; ESP-IDF embeds it in the application metadata used by the CLI, update services, integrations, and Web UI.
+
+### Publishing a GitHub release
+
+1. Bump `version.txt`, update `CHANGELOG.md`, complete validation, and push the release commit to `master`.
+2. Open [Draft a new release](https://github.com/delphimon/AlarmDecoder-IoT/releases/new).
+3. Create or select a tag whose name exactly matches `version.txt` (for example, `AD2IOT-1112`) and target the release commit on `master`.
+4. Select **Generate release notes**, review the comparison range, and publish the release. Saving a draft does not start the build; the workflow starts when the release is published.
+5. The `Publish firmware release` workflow validates the repository, runs host tests, builds firmware and SPIFFS from the tagged commit, creates the checksummed package, and attaches `<version>-esp32-poe-iso-webui.zip` to the release.
+
+The workflow deliberately fails if the release tag differs from the embedded firmware version. Creating a release from an older tag also uses the workflow stored at that tagged commit, so new releases should normally target the latest validated `master` commit.
 
 ###  6.1. <a name='platformio'></a>PlatformIO
 ####  6.1.1. <a name='platformio-setup-notes'></a>Open the project and use the platformio UI inside of vscode to build and flash. Select esp32dev or esp32-poe-iso tree and select Build to compile.
