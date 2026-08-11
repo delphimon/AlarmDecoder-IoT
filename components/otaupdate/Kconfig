@@ -4,4 +4,16 @@ menu "AD2iot * Firmware update support OTA."
         default n
         help
             Enable OTA firmware updates.
+
+    config AD2IOT_OTA_MANIFEST_URL
+        string "HTTPS firmware manifest URL"
+        depends on AD2IOT_OTAUPDATE
+        default "https://www.alarmdecoder.com/ad2iotota/ad2iotv11_version_info.json"
+
+    config AD2IOT_OTA_IMAGE_URL_TEMPLATE
+        string "HTTPS signed firmware URL template"
+        depends on AD2IOT_OTAUPDATE
+        default "https://www.alarmdecoder.com/ad2iotota/signed_alarmdecoder_%s_esp32.bin"
+        help
+            The template must contain one %s placeholder for the build flag.
 endmenu

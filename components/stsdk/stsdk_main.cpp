@@ -48,14 +48,11 @@ static bool _enabled = false;
 extern "C" {
 #endif
 
-// @brief global ST status tracking
-iot_status_t g_iot_status = IOT_STATUS_IDLE;
-
-// @brief global ST stat tracking
-iot_stat_lv_t g_iot_stat_lv;
+// @brief global SmartThings lifecycle status tracking
+st_device_status g_iot_status = ST_DEVICE_STATUS_INIT;
 
 // @brief global ST context pointer
-IOT_CTX* ctx = NULL;
+static IOT_CTX* ctx = NULL;
 
 // onboarding_config_start is null-terminated string
 extern const uint8_t onboarding_config_start[]  asm("_binary_onboarding_config_json_start");
@@ -83,20 +80,30 @@ caps_battery_data_t *cap_battery_data;
 
 char * STSDK_SUBCMD [] = {
     (char*)STSDK_SUBCMD_ENABLE,
+    (char*)STSDK_SUBCMD_STATUS,
     (char*)STSDK_SUBCMD_CLEANUP,
-    (char*)STSDK_SUBCMD_SERIAL,
-    (char*)STSDK_SUBCMD_PUBKEY,
-    (char*)STSDK_SUBCMD_PRIVKEY,
     0 // EOF
 };
 
 enum {
     STSDK_SUBCMD_ENABLE_ID = 0,
-    STSDK_SUBCMD_CLEANUP_ID,
-    STSDK_SUBCMD_SERIAL_ID,
-    STSDK_SUBCMD_PUBKEY_ID,
-    STSDK_SUBCMD_PRIVKEY_ID
+    STSDK_SUBCMD_STATUS_ID,
+    STSDK_SUBCMD_CLEANUP_ID
 };
+
+static const char *stsdk_status_name(st_device_status status)
+{
+    switch (status) {
+    case ST_DEVICE_STATUS_INIT: return "initialized";
+    case ST_DEVICE_STATUS_ONBOARDING_READY: return "onboarding-ready";
+    case ST_DEVICE_STATUS_ONBOARDING_START: return "onboarding-started";
+    case ST_DEVICE_STATUS_ONBOARDING_NEED_CONFIRM: return "onboarding-needs-confirmation";
+    case ST_DEVICE_STATUS_ONBOARDING_ONBOARDED: return "onboarded";
+    case ST_DEVICE_STATUS_CLOUD_DISCONNECTED: return "cloud-disconnected";
+    case ST_DEVICE_STATUS_CLOUD_CONNECTED: return "cloud-connected";
+    default: return "unknown";
+    }
+}
 
 /**
  * @brief component: chime
@@ -245,52 +252,30 @@ static void _cli_cmd_stsdk_event(const char *string)
                 ad2_get_config_key_bool(STSDK_CONFIG_SECTION, STSDK_SUBCMD_ENABLE, &_enabled);
                 ad2_printf_host(true, "SmartThings Direct Connected Devices SDK client is '%s'.\r\n", (_enabled ? "Enabled" : "Disabled"));
                 break;
+            case STSDK_SUBCMD_STATUS_ID: {
+                iot_info_data_t info = {};
+                bool provisioned = false;
+                if (ctx && st_info_get(ctx, IOT_INFO_TYPE_IOT_PROVISIONED, &info) == 0) {
+                    provisioned = info.provisioned;
+                }
+                ad2_printf_host(true,
+                                "SmartThings enabled=%s, identity=STNV, provisioned=%s, status=%s.\r\n",
+                                _enabled ? "yes" : "no",
+                                provisioned ? "yes" : "no",
+                                stsdk_status_name(g_iot_status));
+                break;
+            }
             /**
              * Forget all STSDK state revert back to adoption mode.
              */
             case STSDK_SUBCMD_CLEANUP_ID:
-                ESP_LOGI(TAG, "%s: clean-up data with restart option", __func__);
-                ad2_printf_host(true, "Calling clean-up for STSDK settings.\r\n");
+                if (!ctx) {
+                    ad2_printf_host(true, "SmartThings is not initialized; cleanup was not run.\r\n");
+                    break;
+                }
+                ESP_LOGI(TAG, "%s: clearing onboarding and cloud registration state", __func__);
+                ad2_printf_host(true, "Clearing SmartThings onboarding state; STNV identity is preserved.\r\n");
                 st_conn_cleanup(ctx, true);
-                break;
-            /**
-             * SmartThings Serial.
-             */
-            case STSDK_SUBCMD_SERIAL_ID:
-                // arg found save
-                if (ad2_copy_nth_arg(arg, string, 2, true) >= 0) {
-                    ad2_set_config_key_string(STSDK_CONFIG_SECTION, STSDK_SUBCMD_SERIAL, arg.c_str());
-                    ad2_printf_host(true, "Success setting value. Restart required to take effect.\r\n");
-                    break;
-                }
-                // If no arg then return current show contents of this slot
-                ad2_printf_host(true, "SmartThings '" STSDK_SUBCMD_SERIAL "' arg missing.\r\n");
-                break;
-            /**
-             * SmartThings PrivateKey.
-             */
-            case STSDK_SUBCMD_PRIVKEY_ID:
-                // arg found save
-                if (ad2_copy_nth_arg(arg, string, 2, true) >= 0) {
-                    ad2_set_config_key_string(STSDK_CONFIG_SECTION, STSDK_SUBCMD_PRIVKEY, arg.c_str());
-                    ad2_printf_host(true, "Success setting value. Restart required to take effect.\r\n");
-                    break;
-                }
-                // If no arg then return current show contents of this slot
-                ad2_printf_host(true, "SmartThings '" STSDK_SUBCMD_PRIVKEY "' arg missing.\r\n");
-                break;
-            /**
-             * SmartThings PublicKey.
-             */
-            case STSDK_SUBCMD_PUBKEY_ID:
-                // arg found save
-                if (ad2_copy_nth_arg(arg, string, 2, true) >= 0) {
-                    ad2_set_config_key_string(STSDK_CONFIG_SECTION, STSDK_SUBCMD_PUBKEY, arg.c_str());
-                    ad2_printf_host(true, "Success setting value. Restart required to take effect.\r\n");
-                    break;
-                }
-                // If no arg then return current show contents of this slot
-                ad2_printf_host(true, "SmartThings '" STSDK_SUBCMD_PUBKEY "' arg missing.\r\n");
                 break;
 
             default:
@@ -310,18 +295,15 @@ static struct cli_command stsdk_cmd_list[] = {
         "Usage: smartthings <command> [arg]\r\n"
         "\r\n"
         "    Configuration tool for SmartThings Direct Connected Devices SDK\r\n"
-        "    NOTE: Only the enable setting is kept in the ad2iot.ini config.\r\n"
-        "    The remaining settings are kept in the ```stnv``` partition and\r\n"
-        "    managed by the SmartThings Direct Device SDK.\r\n"
+        "    Device identity is provisioned separately in the STNV partition.\r\n"
+        "    This command never accepts or displays key material.\r\n"
         "Commands:\r\n"
         "    enable [Y|N]            Set or get enable flag\r\n"
-        "    cleanup                 Reset the NVS partition\r\n"
-        "    serial <string>         Set the device serial\r\n"
-        "    publickey <string>      Set the device public key\r\n"
-        "    privatekey <string>     Set the device private key\r\n"
+        "    status                  Show lifecycle and provisioning status\r\n"
+        "    cleanup                 Clear onboarding state and restart\r\n"
         "Examples:\r\n"
         "    ```smartthings enable Y```\r\n"
-        "    ```smartthings publickey aabbccddeeffAABBCCDEEFF```\r\n"
+        "    ```smartthings status```\r\n"
         , _cli_cmd_stsdk_event
     }
 };
@@ -415,7 +397,9 @@ static int fire_trigger_count = 0;
 static TimerHandle_t fire_trigger_timer = nullptr;
 void fire_trigger_clear(TimerHandle_t *arg)
 {
-    xTimerDelete(fire_trigger_timer, 1000 / portTICK_PERIOD_MS);
+    if (fire_trigger_timer) {
+        xTimerDelete(fire_trigger_timer, 1000 / portTICK_PERIOD_MS);
+    }
     fire_trigger_count = 0;
     fire_trigger_timer = nullptr;
     ESP_LOGI(TAG, "Clearing fire panic counter.");
@@ -433,6 +417,7 @@ void cap_fire_cmd_cb(struct caps_momentary_data *caps_data)
         ESP_LOGI(TAG, "Sending fire signal to panel.");
         // send a fire panic F1 button to the panel.
         ad2_fire_alarm(AD2_DEFAULT_VPA_SLOT);
+        fire_trigger_clear(nullptr);
     } else {
         if (fire_trigger_timer) {
             xTimerReset(fire_trigger_timer, 1000 / portTICK_PERIOD_MS);
@@ -460,7 +445,9 @@ static int panic_trigger_count = 0;
 static TimerHandle_t panic_trigger_timer = nullptr;
 void panic_trigger_clear(TimerHandle_t *arg)
 {
-    xTimerDelete(panic_trigger_timer, 1000 / portTICK_PERIOD_MS);
+    if (panic_trigger_timer) {
+        xTimerDelete(panic_trigger_timer, 1000 / portTICK_PERIOD_MS);
+    }
     panic_trigger_count = 0;
     panic_trigger_timer = nullptr;
     ESP_LOGI(TAG, "Clearing panic alarm counter.");
@@ -478,6 +465,7 @@ void cap_panic_alarm_cmd_cb(struct caps_momentary_data *caps_data)
         ESP_LOGI(TAG, "Sending panic alarm signal to panel.");
         // send PANIC command to the panel.
         ad2_panic_alarm(AD2_DEFAULT_VPA_SLOT);
+        panic_trigger_clear(nullptr);
     } else {
         if (panic_trigger_timer) {
             xTimerReset(panic_trigger_timer, 1000 / portTICK_PERIOD_MS);
@@ -506,7 +494,9 @@ static int aux_trigger_count = 0;
 static TimerHandle_t aux_trigger_timer = nullptr;
 void aux_trigger_clear(TimerHandle_t *arg)
 {
-    xTimerDelete(aux_trigger_timer, 1000 / portTICK_PERIOD_MS);
+    if (aux_trigger_timer) {
+        xTimerDelete(aux_trigger_timer, 1000 / portTICK_PERIOD_MS);
+    }
     aux_trigger_count = 0;
     aux_trigger_timer = nullptr;
     ESP_LOGI(TAG, "Clearing aux alarm counter.");
@@ -524,6 +514,7 @@ void cap_aux_alarm_cmd_cb(struct caps_momentary_data *caps_data)
         ESP_LOGI(TAG, "Sending aux alarm signal to panel.");
         // send AUX ALARM command to the panel.
         ad2_aux_alarm(AD2_DEFAULT_VPA_SLOT);
+        aux_trigger_clear(nullptr);
     } else {
         if (aux_trigger_timer) {
             xTimerReset(aux_trigger_timer, 1000 / portTICK_PERIOD_MS);
@@ -601,19 +592,36 @@ void cap_switch_b_cmd_cb(struct caps_switch_data *caps_data)
  */
 void cap_available_version_set(char *available_version)
 {
-    int32_t sequence_no = 0;
-
-    if (!available_version) {
+    if (!ota_cap_handle || !available_version) {
         ESP_LOGE(TAG, "invalid parameter");
         return;
     }
 
-    /* Send avail version to ota cap handler */
-    ST_CAP_SEND_ATTR_STRING(ota_cap_handle, (char*)"availableVersion", available_version, NULL, NULL, sequence_no);
-    if (sequence_no < 0) {
-        ESP_LOGE(TAG, "failed to send init_data");
+    iot_cap_val_t version_value = {};
+    version_value.type = IOT_CAP_VAL_TYPE_STRING;
+    version_value.string = available_version;
+    IOT_EVENT *events[2] = {};
+    events[0] = st_cap_create_attr(ota_cap_handle,
+                                  caps_helper_firmwareUpdate.attr_availableVersion.name,
+                                  &version_value, NULL, NULL);
+    iot_cap_val_t available_value = {};
+    available_value.type = IOT_CAP_VAL_TYPE_BOOLEAN;
+    available_value.boolean = strcmp(available_version, ad2_firmware_version()) != 0;
+    events[1] = st_cap_create_attr(ota_cap_handle,
+                                  caps_helper_firmwareUpdate.attr_updateAvailable.name,
+                                  &available_value, NULL, NULL);
+    if (!events[0] || !events[1]) {
+        if (events[0]) st_cap_free_attr(events[0]);
+        if (events[1]) st_cap_free_attr(events[1]);
+        ESP_LOGE(TAG, "failed to create firmwareUpdate attributes");
+        return;
     }
-
+    const int32_t sequence_no = st_cap_send_attr(events, 2);
+    st_cap_free_attr(events[0]);
+    st_cap_free_attr(events[1]);
+    if (sequence_no < 0) {
+        ESP_LOGE(TAG, "failed to send available firmware state");
+    }
 }
 
 /**
@@ -933,9 +941,12 @@ void on_ready_to_arm_change_cb(std::string *msg, AD2PartitionState *s, void *arg
     AD2PartitionState *defs = ad2_get_partition_state(AD2_DEFAULT_VPA_SLOT);
     if ((s && defs) && s->partition == defs->partition) {
         ESP_LOGI(TAG, "ON_READY_CHANGE: '%i'", s->ready);
-        // first message from AD2* fresh state to all devices
-        if (s->count == 1) {
+        // The first panel message explicitly re-syncs every capability. Avoid
+        // re-entering refresh when it calls this handler for the ready state.
+        const bool is_refresh = msg && (*msg == "REFRESH");
+        if (s->count == 1 && !is_refresh) {
             refresh_cmd_cb(nullptr, nullptr, nullptr);
+            return;
         }
         if ( s->ready ) {
             cap_contactSensor_data_ready_to_arm->set_contact_value(cap_contactSensor_data_ready_to_arm, caps_helper_contactSensor.attr_contact.value_open);
@@ -979,33 +990,18 @@ void stsdk_init(void)
 
     ESP_LOGI(TAG, "Starting STSDK");
 
-    // Create a device info json string for the st_conn_init from internal NV keys
-    cJSON *root = cJSON_CreateObject();
-    cJSON *deviceInfo = cJSON_CreateObject();
-
-    std::string privateKey;
-    std::string publicKey;
-    std::string serialNumber;
-    ad2_get_config_key_string(STSDK_CONFIG_SECTION, STSDK_SUBCMD_PRIVKEY, privateKey);
-    ad2_get_config_key_string(STSDK_CONFIG_SECTION, STSDK_SUBCMD_PUBKEY, publicKey);
-    ad2_get_config_key_string(STSDK_CONFIG_SECTION, STSDK_SUBCMD_SERIAL, serialNumber);
-
-    cJSON_AddStringToObject(deviceInfo, "firmwareVersion", ad2_firmware_version());
-    cJSON_AddStringToObject(deviceInfo, "privateKey", privateKey.c_str());
-    cJSON_AddStringToObject(deviceInfo, "publicKey", publicKey.c_str());
-    cJSON_AddStringToObject(deviceInfo, "serialNumber", serialNumber.c_str());
-    cJSON_AddItemToObject(root, "deviceInfo", deviceInfo);
-    static char *device_info_json = NULL;
-    device_info_json = cJSON_Print(root);
-    ctx = st_conn_init(onboarding_config, onboarding_config_len, (unsigned char*)device_info_json, strlen(device_info_json));
+    // Identity is read by the SDK from the dedicated STNV partition. Never put
+    // serial numbers or keys in this application-owned JSON buffer.
+    std::string device_info_json = ad2_string_printf(
+                                       "{\"deviceInfo\":{\"firmwareVersion\":\"%s\"}}",
+                                       ad2_firmware_version());
+    ctx = st_conn_init(onboarding_config, onboarding_config_len,
+                       (unsigned char *)device_info_json.c_str(), device_info_json.length());
 
     // if ctx is good then the network layer should be up.
     if (ctx != NULL) {
         hal_set_netif_started(true);
     }
-
-    //cJSON_free(device_info_json);
-    cJSON_Delete(root);
 
     if (ctx != NULL) {
         iot_err = st_conn_set_noti_cb(ctx, iot_noti_cb, NULL);
@@ -1014,6 +1010,7 @@ void stsdk_init(void)
         }
     } else {
         ESP_LOGE(TAG, "failed to create the iot_context");
+        return;
     }
 
     // Add AD2 capabilies
@@ -1082,11 +1079,15 @@ void capability_init()
         }
     }
     // firmwareUpdate capabilities init
-    ota_cap_handle = st_cap_handle_init(ctx, "main", "firmwareUpdate", cap_current_version_init_cb, NULL);
+    ota_cap_handle = st_cap_handle_init(ctx, "main", caps_helper_firmwareUpdate.id, cap_current_version_init_cb, NULL);
     if (ota_cap_handle) {
-        iot_err = st_cap_cmd_set_cb(ota_cap_handle, "updateFirmware", update_firmware_cmd_cb, NULL);
+        iot_err = st_cap_cmd_set_cb(ota_cap_handle, caps_helper_firmwareUpdate.cmd_updateFirmware.name, update_firmware_cmd_cb, NULL);
         if (iot_err) {
             ESP_LOGE(TAG, "failed to set cmd_cb for updateFirmware");
+        }
+        iot_err = st_cap_cmd_set_cb(ota_cap_handle, caps_helper_firmwareUpdate.cmd_checkForFirmwareUpdate.name, check_firmware_cmd_cb, NULL);
+        if (iot_err) {
+            ESP_LOGE(TAG, "failed to set cmd_cb for checkForFirmwareUpdate");
         }
     }
 
@@ -1270,28 +1271,25 @@ void capability_init()
 /**
  * @brief status callback for STSDK api.
  */
-void iot_status_cb(iot_status_t status,
-                   iot_stat_lv_t stat_lv, void *usr_data)
+void iot_status_cb(st_device_status status, void *usr_data)
 {
     g_iot_status = status;
-    g_iot_stat_lv = stat_lv;
-
-    ESP_LOGI(TAG, "iot_status_cb %d, stat: %d", g_iot_status, g_iot_stat_lv);
+    ESP_LOGI(TAG, "SmartThings status: %s (%d)", stsdk_status_name(status), status);
 
     // Because ST takes control of the WiFi
     // let everyone know it is up and connected.
-    if (status == IOT_STATUS_CONNECTING) {
+    if (status == ST_DEVICE_STATUS_CLOUD_CONNECTED) {
         hal_set_network_connected(true);
+        refresh_cmd_cb(NULL, NULL, NULL);
     } else {
         hal_set_network_connected(false);
     }
 
     switch(status) {
-    case IOT_STATUS_NEED_INTERACT:
+    case ST_DEVICE_STATUS_ONBOARDING_NEED_CONFIRM:
         noti_led_mode = LED_ANIMATION_MODE_FAST;
         break;
-    case IOT_STATUS_IDLE:
-    case IOT_STATUS_CONNECTING:
+    case ST_DEVICE_STATUS_CLOUD_CONNECTED:
         noti_led_mode = LED_ANIMATION_MODE_IDLE;
 
 #if 0 // TODO/FIXME
@@ -1338,7 +1336,11 @@ void stsdk_connection_start(void)
 #endif
 
     // process on-boarding procedure. There is nothing more to do on the app side than call the API.
-    err = st_conn_start(ctx, (st_status_cb)&iot_status_cb, IOT_STATUS_ALL, NULL, pin_num);
+    if (!ctx) {
+        ESP_LOGE(TAG, "cannot start SmartThings connection without a context");
+        return;
+    }
+    err = st_conn_start(ctx, iot_status_cb, NULL, pin_num);
     if (err) {
         ESP_LOGE(TAG, "failed to start connection. err:%d", err);
     }
@@ -1392,16 +1394,13 @@ void cap_health_check_init_cb(IOT_CAP_HANDLE *handle, void *usr_data)
 void cap_current_version_init_cb(IOT_CAP_HANDLE *handle, void *usr_data)
 {
     int32_t sequence_no = 0;
-
-    /* Setup switch on state */
-    // FIXME: get from device_info ctx->device_info->firmware_version
-    // that is loaded from device_info.json
-
-    /* Send avail version to ota cap handler */
-    ST_CAP_SEND_ATTR_STRING(handle, (char*)"availableVersion", (char *)ad2_firmware_version(), NULL, NULL, sequence_no);
+    ST_CAP_SEND_ATTR_STRING(handle,
+                            (char *)caps_helper_firmwareUpdate.attr_currentVersion.name,
+                            (char *)ad2_firmware_version(), NULL, NULL, sequence_no);
     if (sequence_no < 0) {
-        ESP_LOGE(TAG, "failed to send init_data");
+        ESP_LOGE(TAG, "failed to send current firmware version");
     }
+    cap_available_version_set((char *)ota_get_available_version());
 
 }
 
@@ -1413,6 +1412,9 @@ void refresh_cmd_cb(IOT_CAP_HANDLE *handle,
                     iot_cap_cmd_data_t *cmd_data, void *usr_data)
 {
     ESP_LOGI(TAG, "refresh_cmd_cb");
+    if (ota_cap_handle) {
+        cap_current_version_init_cb(ota_cap_handle, NULL);
+    }
 
     // get the default partition state.
     // FIXME: using DEFAULT slot for now. Needs to be configurable
@@ -1431,7 +1433,7 @@ void refresh_cmd_cb(IOT_CAP_HANDLE *handle,
         on_chime_change_cb(&statestr, s, nullptr);
 
         // send ready state
-        // Called by ready so dont call ready or BOOM!
+        on_ready_to_arm_change_cb(&statestr, s, nullptr);
 
         // send fire state
         on_fire_change_cb(&statestr, s, nullptr);
@@ -1459,7 +1461,13 @@ void refresh_cmd_cb(IOT_CAP_HANDLE *handle,
 void update_firmware_cmd_cb(IOT_CAP_HANDLE *handle,
                             iot_cap_cmd_data_t *cmd_data, void *usr_data)
 {
-    hal_ota_do_update(nullptr);
+    hal_do_fwupdate(nullptr);
+}
+
+void check_firmware_cmd_cb(IOT_CAP_HANDLE *handle,
+                           iot_cap_cmd_data_t *cmd_data, void *usr_data)
+{
+    ota_check_for_update();
 }
 #ifdef __cplusplus
 } // extern "C"

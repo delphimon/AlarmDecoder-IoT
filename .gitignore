@@ -2,3 +2,9 @@
 build
 .vscode
 sdkconfig
+device_info.json
+*.stnv.bin
+*.ota-private.pem
+*.ota-signing-key.pem
+*.st-identity.json
+__pycache__/

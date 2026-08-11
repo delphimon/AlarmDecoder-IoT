@@ -73,21 +73,10 @@ See the README-FLASH-ESP32.md inside the release file for instructions on flashi
   - Reboot the device after inserting the card for changes to take effect.
 
 ###  3.2. <a name='smartthings-build-(stsdk)---esp32/esp32-poe-iso-stsdk'></a>SmartThings build (stsdk) - esp32/esp32-poe-iso-stsdk
-- Enabled components: SmartThings, Pushover, Twilio, Sendgrid, ser2sock, webUI, MQTT, ftpd, top.
+- Enabled components: SmartThings Direct Connected, BLE onboarding, STNV identity, signed OTA, AlarmDecoder socket input, and top.
+- Disabled components: webUI, FTP, MQTT, network CLI, ser2sock server, Twilio, Pushover, uSD update, and the appliance-managed Wi-Fi/Ethernet drivers.
 
-This build is compiled using the [st-device-sdk-c-ref](https://github.com/SmartThingsCommunity/st-device-sdk-c-ref) from the SmartThings github repo and has the webUI component disabled.
-
-A few options are available as the AD2IoT device moves toward being certified and directly available in the SmartThings app. In order to Discover and adopt the AD2IoT device it needs to be visible in the "My Testing Devices" under the "Adding device" panel.
-
-First you will need to [enable Developer Mode in the app
-](https://developer.samsung.com/smartthings/blog/en-us/2019/02/13/using-developer-mode-in-the-smartthings-app)
-
-Next decide if you want to build your own profile and layout or join the existing AlarmDecoder profile for how this device will be shown in the SmartThings app.
-
-- Join the ```Nu Tech Software Solutions, Inc.``` organization where the profiles are already working and in current development. Enroll in the organization using the Manufacturer ID '''0AOf'''. Once enrolled the device serial number and keys will be manually generated and sent to the same email address.
-https://smartthings.developer.samsung.com/partner/enroll
-
-- Use the SmartThings/Samsung developer workspace to create custom profiles and onboarding as described in this howto guide [How to build Direct Connected devices with the SmartThings Platform](https://community.smartthings.com/t/how-to-build-direct-connected-devices/204055). Generate a serial number and keys and register them in the management portal and configure the device with the validated keys.
+This is a separate CI artifact built through the pinned SmartThings ESP32 reference project. It retains the AD2IOTV10 profile and is not a claim of WWST certification or commercial launch readiness. See [SmartThings Direct-Connected firmware](docs/SMARTTHINGS.md) for build, provisioning, topology, OTA, adoption, and validation instructions.
 
 ##  4. <a name='configuring-the-ad2iot-device'></a>Configuring the AD2IoT device
 Configuration of the AD2IoT is done directly over the USB serial port using a command line interface, or by editing the configuration file [ad2iot.ini](data/ad2iot.ini) on the internal spiffs partition using ftp over a local network or by placing a config file named [ad2iot.ini](data/ad2iot.ini) on an attached uSD card with a fat32 partition.
@@ -153,21 +142,9 @@ Network CLI diagnostics have important limits: the TCP session depends on the sa
     - Configure notifications
 
   - SmartThings Direct-connected device mode.```*stsdk firmware build only```
-    - Disable networking to allow the SmartThings driver to manage the network hardware and allow adopting over 802.11 b/g/n 2.4ghz Wi-Fi.
-      - ```netmode N```
-    - Configure the default partition in slot 1 for the partition to connect to the SmartThings app.
-      - ```partition 1 18```
-    - Enable the SmartThings driver.
-      - ```stenable Y```
-    - Restart for these changes to take effect.
-      - ```restart```
-    - Configure the SmartThings security credentials provided by Nu Tech Software Solutions, Inc.
-      - ```stserial AAABBbbcdde...```
-      - ```stpublickey AAABBbbcdde...```
-      - ```stprivatekey AAABBbbcdde...```
-    - Restart the device and adopt the AD2IOT device under ```My Testing Devices``` in the SmartThings app.
-      - ```restart```
-    - Additional notification components will only work after the device is adopted and connected to the local Wi-Fi network.
+    - The bundled profile uses `netmode N`, `ad2source SOCK ad2iot.lan:10000`, partition address 18, and hostname `ad2iot-stsdk`.
+    - Provision identity into STNV with `tools/provision_stnv.py`; key material is never accepted by the device CLI or stored in `ad2iot.ini`.
+    - Adopt through BLE from SmartThings developer mode. See [docs/SMARTTHINGS.md](docs/SMARTTHINGS.md).
 
 ###  5.1. <a name='basic-commands'></a>Main commands
 - help
@@ -575,20 +552,10 @@ HTTPS is opt-in and listens on port 443. Copy the PEM certificate chain and unen
 Direct-connected devices connect directly to the SmartThings cloud. The SDK for Direct Connected Devices is equipped to manage all MQTT topics and onboarding requirements, freeing you to focus on the actions and attributes of your device. To facilitate the development of device application in an original chipset SDK, the core device library and the examples were separated into two git repositories. That is, if you want to use the core device library in your original chipset SDK that installed before, you may simply link it to develop a device application in your existing development environment. For more info see https://github.com/SmartThingsCommunity/st-device-sdk-c-ref.
 
 ####  5.4.1. <a name='-configuration-for-smartthings-iot-client'></a> Configuration tool for SmartThings IoT client
-- Enable SmartThings component *stsdk
-  - ```stenable {bool}```
-    - {bool}: [Y]es/[N]o
-- Sets the SmartThings device_info serialNumber.
-  - ```stserial {serialNumber}```
-  - Example: ```stserial AaBbCcDdEeFfGg...```
-- Sets the SmartThings device_info publicKey.
-  - ```stpublickey {publicKey}```
-  - Example: ```stpublickey AaBbCcDdEeFfGg...```
-- Sets the SmartThings device_info privateKey.
-  - ```stprivatekey {privateKey}```
-  - Example: ```stprivatekey AaBbCcDdEeFfGg...```
-- Cleanup NV data with restart option
-  - ```stcleanup```
+- `smartthings enable Y|N` controls startup.
+- `smartthings status` reports enabled, masked provisioning, and lifecycle state without displaying identity material.
+- `smartthings cleanup` clears onboarding/cloud registration while preserving STNV identity.
+- Serial-number, public-key, and private-key CLI setters do not exist. Use the external provisioning flow in [docs/SMARTTHINGS.md](docs/SMARTTHINGS.md).
 
 ###  5.5. <a name='pushover.net-notification-component'></a>Pushover.net notification component
 Pushover is a platform for sending and receiving push notifications. On the server side, they provide an HTTP API for queueing messages to deliver to devices addressable by User or Group Keys. On the device side, they offer iOS, Android, and Desktop clients to receive those push notifications, show them to the user, and store them for offline viewing. See: https://pushover.net/
@@ -897,68 +864,14 @@ The firmware version is sourced from `version.txt`. Bump that value for every co
 ####  6.1.1. <a name='platformio-setup-notes'></a>Open the project and use the platformio UI inside of vscode to build and flash. Select esp32dev or esp32-poe-iso tree and select Build to compile.
 ###  6.2. <a name='smartthings-device-sdk-build-environment'></a>SmartThings device SDK build environment
 ####  6.2.1. <a name='setup-build-environment'></a>Setup build environment
-- Based on the instructions in the [SmartThings SDK for Direct connected devices for C](https://github.com/SmartThingsCommunity/st-device-sdk-c-ref) for setting up a build environment and [This community post](https://community.smartthings.com/t/how-to-build-direct-connected-devices/204055) to build the code inside of the stsdk c-ref build environment.
-```
-# Make the root esp folder.
-cd ~
-mkdir esp
-
-# Get and install esp-idf toolchain v5.0(AF), v4.3.2(AF),
-cd ~/esp
-git clone -b v5.0 --recursive https://github.com/espressif/esp-idf.git
-
-cd ~/esp/esp-idf
-## Added esp32 to the end. Need to test above again with this change.
-./install.sh esp32
-
-## At the end will be prompted to set the environment for building by sourcing the exports.sh file created during setup of stsdk c-ref. You can also follow the espressif docs and set the alias get_idf to '. $HOME/esp/esp-idf/export.sh'
-
-. ./export.sh
-
-# Install the xtensa esp32 toolchain
-## Is this automagic now? During setup of esp-idf above.
-### Downloading xtensa-esp32-elf-gcc8_4_0-esp-2021r2-linux-amd64.tar.gz to /home/mathewss/.espressif/dist/xtensa-esp32-elf-gcc8_4_0-esp-2021r2-linux-amd64.tar.gz.tmp
-cd ~/esp
-wget https://dl.espressif.com/dl/xtensa-esp32-elf-linux64-1.22.0-97-gc752ad5-5.2.0.tar.gz
-tar -xvf xtensa-esp32-elf-linux64-1.22.0-97-gc752ad5-5.2.0.tar.gz
-
-# Install st-device-sdk-c-ref master branch currently v1.7.5.
-cd ~/esp
-git clone https://github.com/SmartThingsCommunity/st-device-sdk-c-ref.git
-cd st-device-sdk-c-ref
-python setup.py esp32
-
-# Confirm the switch example can be built before continuing.
-python build.py esp32 switch_example
-
-# Link our external AlarmDecoder-IoT project into the apps folder for st-device-sdk-c-ref.
-# or fetch the AlarmDecoder-IoT project directly inside of the st-device-sdk-c-ref apps/esp32/ folder.
-ln -s ~/Code/AlarmDecoder-IoT ~/esp/st-device-sdk-c-ref/apps/esp32
-```
+The immutable reference/core/ESP-IDF revisions and reproducible commands are maintained in [.github/workflows/build.yml](.github/workflows/build.yml) and explained in [docs/SMARTTHINGS.md](docs/SMARTTHINGS.md). The target is SmartThings Device SDK C v2.3.2 with ESP-IDF 5.0.7.
 
 ####  6.2.2. <a name='configure-the-project'></a>Configure the project
-Run menu config and enable/disable components. Each module will consume code space and memory so test with the ```top``` command to be sure resources are not being exausted. 
-  - Component config:
-    - Enable ```SmartThings IoT Core```
-      - Enable ESP32 support. ```BSP Support(ESP32)```
-    - Disable ```AD2Iot * FTP demon```
-```
-cd ~/esp/st-device-sdk-c-ref
-python build.py esp32 AlarmDecoder-IoT menuconfig
-```
+Use the checked-in `sdkconfig.esp32` and `partitions.smartthings.4MB.csv`; do not change SmartThings SDK core code.
 
 ####  6.2.3. <a name='build,-flash,-and-run'></a>Build, Flash, and Run
 
-Build the project and flash it to the board, then run monitor tool to view serial output:
-
-```
-cd ~/esp/st-device-sdk-c-ref
-python build.py esp32 AlarmDecoder-IoT build flash monitor -p /dev/ttyUSB0
-```
-
-(To exit the serial monitor, type ``Ctrl-]``.)
-
-See the [Prerequisites](https://github.com/SmartThingsCommunity/st-device-sdk-c-ref#prerequisites) for full steps to configure and use ESP-IDF and the STSDK to build this project.
+CI publishes `esp32-poe-iso-stsdk` with bootloader, partition table, initial OTA data, SPIFFS, and application images, and rejects an application larger than a `0x1e0000` OTA slot. Flash/provision/adoption commands are in [docs/SMARTTHINGS.md](docs/SMARTTHINGS.md).
 
 ##  7. <a name='example-output-from-esp32-usb-serial-console'></a>Example Output from ESP32 USB serial console
 

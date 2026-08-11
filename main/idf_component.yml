@@ -1,0 +1,4 @@
+dependencies:
+  espressif/libsodium: "1.0.20~1"
+  idf:
+    version: ">=5.0,<5.2"

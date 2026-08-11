@@ -60,3 +60,60 @@ jobs:
         with:
           name: AD2IoT-Release-Package
           path: AD2IoT-Release
+
+  smartthings:
+    runs-on: ubuntu-latest
+    env:
+      ST_REF_COMMIT: d9450bb5dd4e1f6f25bc7987dc3192f4f5e17b3f
+      ST_CORE_COMMIT: e01b64f63c078cf0caca610dd35a39e63e1ea824
+      ESP_IDF_COMMIT: e5617c26f7fec52b05e87c45062510122fb9ea05
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run SmartThings host tests
+        run: python -m unittest discover -s test -p 'test_smartthings_*.py'
+
+      - name: Install ESP-IDF prerequisites
+        run: sudo apt-get update && sudo apt-get install -y gperf cmake ninja-build ccache dfu-util libusb-1.0-0
+
+      - name: Check out immutable SmartThings SDK and ESP-IDF revisions
+        run: |
+          git clone https://github.com/SmartThingsCommunity/st-device-sdk-c-ref.git stsdk-ref
+          git -C stsdk-ref checkout "$ST_REF_COMMIT"
+          git -C stsdk-ref submodule update --init iot-core bsp/esp32
+          test "$(git -C stsdk-ref/iot-core rev-parse HEAD)" = "$ST_CORE_COMMIT"
+          test "$(git -C stsdk-ref/bsp/esp32 rev-parse HEAD)" = "$ESP_IDF_COMMIT"
+          cd stsdk-ref
+          python setup.py esp32
+
+      - name: Build isolated SmartThings ESP32-POE-ISO firmware
+        run: |
+          mkdir -p stsdk-ref/apps/esp32/alarmdecoder_ad2iot
+          rsync -a --exclude '.git' --exclude 'stsdk-ref' ./ stsdk-ref/apps/esp32/alarmdecoder_ad2iot/
+          cd stsdk-ref
+          python build.py esp32 alarmdecoder_ad2iot
+
+      - name: Validate and package SmartThings images
+        run: |
+          build=stsdk-ref/apps/esp32/alarmdecoder_ad2iot/build
+          app="$build/alarmdecoder_ad2iot_esp32.bin"
+          test -f "$app"
+          test "$(stat -c%s "$app")" -le $((0x1e0000))
+          mkdir esp32-poe-iso-stsdk
+          cp "$app" esp32-poe-iso-stsdk/application.bin
+          cp "$build/bootloader/bootloader.bin" esp32-poe-iso-stsdk/
+          cp "$build/partition_table/partition-table.bin" esp32-poe-iso-stsdk/
+          cp "$build/ota_data_initial.bin" esp32-poe-iso-stsdk/
+          cp "$build/spiffs.bin" esp32-poe-iso-stsdk/
+          test "$(find esp32-poe-iso-stsdk -maxdepth 1 -type f | wc -l)" -eq 5
+
+      - name: Upload SmartThings firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-poe-iso-stsdk
+          path: esp32-poe-iso-stsdk

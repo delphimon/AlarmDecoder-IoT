@@ -40,13 +40,12 @@
 #include "caps_carbonMonoxideDetector.h"
 #include "caps_powerSource.h"
 #include "caps_battery.h"
+#include "caps/iot_caps_helper_firmwareUpdate.h"
 
 #define STSDK_COMMAND        "smartthings"
 #define STSDK_SUBCMD_ENABLE  "enable"
+#define STSDK_SUBCMD_STATUS  "status"
 #define STSDK_SUBCMD_CLEANUP "cleanup"
-#define STSDK_SUBCMD_SERIAL  "serial"
-#define STSDK_SUBCMD_PUBKEY  "publickey"
-#define STSDK_SUBCMD_PRIVKEY "privatekey"
 
 #define STSDK_CONFIG_SECTION "smartthings"
 
@@ -63,14 +62,14 @@ void stsdk_connection_start(void);
 void capability_init();
 void cap_current_version_init_cb(IOT_CAP_HANDLE *handle, void *usr_data);
 void update_firmware_cmd_cb(IOT_CAP_HANDLE *handle, iot_cap_cmd_data_t *cmd_data, void *usr_data);
+void check_firmware_cmd_cb(IOT_CAP_HANDLE *handle, iot_cap_cmd_data_t *cmd_data, void *usr_data);
 void cap_health_check_init_cb(IOT_CAP_HANDLE *handle, void *usr_data);
 void ping_cmd_cb(IOT_CAP_HANDLE *handle, iot_cap_cmd_data_t *cmd_data, void *usr_data);
 void refresh_cmd_cb(IOT_CAP_HANDLE *handle, iot_cap_cmd_data_t *cmd_data, void *usr_data);
 int stsdk_get_switch_b_state();
 int stsdk_get_switch_b_state();
 
-extern iot_status_t g_iot_status;
-extern iot_stat_lv_t g_iot_stat_lv;
+extern st_device_status g_iot_status;
 
 extern IOT_CAP_HANDLE *ota_cap_handle;
 extern IOT_CAP_HANDLE *healthCheck_cap_handle;

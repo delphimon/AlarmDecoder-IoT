@@ -351,8 +351,15 @@ void hal_factory_reset()
     // create simple ini.
     FILE* f = fopen("/" AD2_SPIFFS_MOUNT_POINT "/ad2iot.ini", "w");
     fprintf(f, "#AD2IoT config file\r\n");
+#if CONFIG_STDK_IOT_CORE
+    fprintf(f, "ad2source = SOCK ad2iot.lan:10000\r\n");
+    fprintf(f, "netmode = N\r\n");
+    fprintf(f, "[smartthings]\r\n");
+    fprintf(f, "enable = true\r\n");
+#else
     fprintf(f, "ad2source = C 4:36\r\n");
     fprintf(f, "netmode = E mode=d\r\n");
+#endif
     fprintf(f, "logmode = I\r\n");
 #if CONFIG_AD2IOT_FTP_DAEMON
     fprintf(f, "[ftpd]\r\n");
@@ -590,6 +597,7 @@ void hal_init_wifi(std::string &args)
 /**
  * @brief initialize the ethernet driver
  */
+#if CONFIG_AD2IOT_USE_ETHERNET
 void hal_init_eth(std::string &args)
 {
     ESP_LOGI(TAG, "ETH hardware init start");
@@ -722,6 +730,7 @@ void hal_init_eth(std::string &args)
 
     return;
 }
+#endif // CONFIG_AD2IOT_USE_ETHERNET
 
 /**
  * @brief Set wifi adapter hostname

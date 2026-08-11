@@ -25,6 +25,9 @@
 #define _OTA_UTIL_H
 #if CONFIG_AD2IOT_OTAUPDATE
 void ota_do_update(const char *arg);
+void ota_check_for_update();
+bool ota_update_in_progress();
+const char *ota_get_available_version();
 void ota_register_cmds();
 void ota_init();
 #endif

@@ -26,6 +26,7 @@ static const char *TAG = "AD2_IoT";
 
 // AlarmDecoder std includes
 #include "alarmdecoder_main.h"
+#include "ser2sock_endpoint.h"
 
 // esp component includes
 #include "driver/uart.h"
@@ -747,89 +748,50 @@ static void ad2uart_client_task(void *pvParameters)
  */
 bool _ser2sock_client_connect(const char *args)
 {
-    // load the host and port params from the mode args.
-    std::string buf = args;
-    int res;
+    std::string buf = args ? args : "";
+    Ser2sockEndpoint endpoint;
+    if (!ad2_parse_ser2sock_endpoint(buf, endpoint)) {
+        ESP_LOGE(TAG, "Invalid ser2sock endpoint '%s'; expected host:port or [IPv6]:port", buf.c_str());
+        return false;
+    }
+    const std::string &host = endpoint.host;
+    const std::string &service = endpoint.service;
+    const long port = strtol(service.c_str(), nullptr, 10);
 
-    // Storage for parsed Host & Port to connect to.
-    int port = -1;
-    std::string host;
-    int addr_family = 0;
-    int size;
-#if CONFIG_LWIP_IPV6
-    bool isv6 = false;
-    struct sockaddr_in6 dest_addr6 = {};
-    dest_addr6.sin6_family = AF_INET6;
-#endif
-    struct sockaddr_in dest_addr = {};
+    struct addrinfo hints = {};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
 
-    std::regex rgx;
-    std::smatch matches;
-#if CONFIG_LWIP_IPV6
-    // test for IPv6 host:port RFC 3986, section 3.2.2: Host. Must be surrounded by square braces.
-    rgx = "^\\[(.*)\\]:(.*)$";
-    if (std::regex_search(buf, matches, rgx)) {
-        host = matches[1].str();
-        port = std::atoi(matches[2].str().c_str());
-        isv6 = true;
-    } else
-#endif
-    {
-        // Test for IPv4:PORT
-        rgx = "^(.*):(.*)$";
-        if (std::regex_search(buf, matches, rgx)) {
-            host = matches[1].str();
-            port = std::atoi(matches[2].str().c_str());
+    struct addrinfo *addresses = nullptr;
+    const int gai_error = getaddrinfo(host.c_str(), service.c_str(), &hints, &addresses);
+    if (gai_error != 0 || addresses == nullptr) {
+        ESP_LOGE(TAG, "Unable to resolve ser2sock host '%s': getaddrinfo=%d", host.c_str(), gai_error);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Connecting to ser2sock host '%s' on port %ld", host.c_str(), port);
+    for (struct addrinfo *address = addresses; address != nullptr; address = address->ai_next) {
+#if !CONFIG_LWIP_IPV6
+        if (address->ai_family == AF_INET6) {
+            continue;
         }
-    }
-
-    // no valid address parsed sleep and restart.
-    if (port == -1) {
-        ESP_LOGE(TAG, "Error parsing host:port from settings '%s'. Sleeping for 30 seconds.", buf.c_str());
-        // sleep a long time maybe the config will be updated live.
-        vTaskDelay(30000 / portTICK_PERIOD_MS);
-        return false;
-    }
-
-    ESP_LOGI(TAG, "Connecting to ser2sock host '%s' on port %i", host.c_str(), port);
-
-    // detect IPv4 vs IPv6 host address see RFC 3986, section 3.2.2: Host
-#if CONFIG_LWIP_IPV6
-    if (isv6) {
-        //res = inet_pton(AF_INET6, host.c_str(), &dest_addr6.sin6_addr);
-        dest_addr6.sin6_port = htons(port);
-        addr_family = AF_INET6;
-        size = sizeof(struct sockaddr_in6);
-    } else
 #endif
-    {
-        dest_addr.sin_addr.s_addr = inet_addr(host.c_str());
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(port);
-        addr_family = AF_INET;
-        size = sizeof(struct sockaddr_in);
+        const int candidate = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+        if (candidate < 0) {
+            continue;
+        }
+        if (connect(candidate, address->ai_addr, address->ai_addrlen) == 0) {
+            g_ad2_client_handle = candidate;
+            break;
+        }
+        ESP_LOGW(TAG, "ser2sock address failed to connect: errno %d", errno);
+        close(candidate);
     }
+    freeaddrinfo(addresses);
 
-    g_ad2_client_handle =  socket(addr_family, SOCK_STREAM, IPPROTO_TCP);
     if (g_ad2_client_handle < 0) {
-        ESP_LOGE(TAG, "ser2sock client unable to create socket: errno %d", errno);
-        return false;
-    }
-    ESP_LOGI(TAG, "ser2sock client socket created, connecting to host %s on port %d", host.c_str(), port);
-
-#if CONFIG_LWIP_IPV6
-    if (isv6) {
-        res = connect(g_ad2_client_handle, (struct sockaddr *)&dest_addr6, size);
-    } else
-#endif
-    {
-        res = connect(g_ad2_client_handle, (struct sockaddr *)&dest_addr, size);
-    }
-
-    if (res != 0) {
-        ESP_LOGE(TAG, "ser2sock client socket unable to connect: errno %d", errno);
-        close(g_ad2_client_handle);
-        g_ad2_client_handle = -1;
+        ESP_LOGE(TAG, "No resolved address for '%s' accepted the connection", host.c_str());
         return false;
     }
     ESP_LOGI(TAG, "ser2sock client successfully connected");
@@ -870,10 +832,14 @@ static void ser2sock_client_task(void *pvParameters)
                         int len = recv(g_ad2_client_handle, rx_buffer, sizeof(rx_buffer) - 1, 0);
                         // test if error occurred
                         if (len < 0) {
-                            if ( errno != EAGAIN ) {
+                            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
                                 ESP_LOGE(TAG, "ser2sock client recv failed: errno %d", errno);
                                 break;
                             }
+                        }
+                        else if (len == 0) {
+                            ESP_LOGW(TAG, "ser2sock server closed the connection");
+                            break;
                         }
                         // Data received
                         else {

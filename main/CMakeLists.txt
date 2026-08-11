@@ -1,9 +1,11 @@
 idf_component_register(SRCS "ad2_utils.cpp" "alarmdecoder_main.cpp"
+                            "ser2sock_endpoint.cpp"
                             "device_control.cpp"
                             "ad2_cli_cmd.cpp"
                             "ad2_uart_cli.cpp"
                     REQUIRES idf::esp-tls
                     REQUIRES idf::esp_wifi
+                    REQUIRES idf::bt
                     REQUIRES idf::esp_eth
                     REQUIRES idf::spi_flash
                     REQUIRES idf::json
@@ -34,6 +36,8 @@ FetchContent_MakeAvailable(simpleini)
 include_directories(${simpleini_SOURCE_DIR})
 
 if(CONFIG_STDK_IOT_CORE)
-        add_subdirectory($ENV{STDK_CORE_PATH} iotcore)
+        file(TO_CMAKE_PATH "$ENV{STDK_CORE_PATH}" STDK_CORE_PATH_CMAKE)
+        add_subdirectory(${STDK_CORE_PATH_CMAKE} iotcore)
         target_link_libraries(${COMPONENT_LIB} PUBLIC iotcore)
+        spiffs_create_partition_image(spiffs ../data-smartthings FLASH_IN_PROJECT)
 endif()

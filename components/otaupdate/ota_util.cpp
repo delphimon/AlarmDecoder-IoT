@@ -33,18 +33,19 @@
  // FreeRTOS includes
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 
 // esp component includes
 #include <esp_https_ota.h>
 #include <esp_ota_ops.h>
+#include <esp_crt_bundle.h>
 #include "mbedtls/sha256.h"
 #include "mbedtls/ssl.h"
 
 //#define DEBUG_OTA
 
-#define CONFIG_OTA_SERVER_URL "https://www.alarmdecoder.com/ad2iotota/"
-#define CONFIG_FIRMWARE_VERSION_INFO_URL CONFIG_OTA_SERVER_URL "ad2iotv11_version_info.json"
-#define CONFIG_FIRMWARE_UPGRADE_URL_FMT CONFIG_OTA_SERVER_URL "signed_alarmdecoder_%s_esp32.bin"
+#define CONFIG_FIRMWARE_VERSION_INFO_URL CONFIG_AD2IOT_OTA_MANIFEST_URL
+#define CONFIG_FIRMWARE_UPGRADE_URL_FMT CONFIG_AD2IOT_OTA_IMAGE_URL_TEMPLATE
 
 #define OTA_SIGNATURE_SIZE 256
 #define OTA_SIGNATURE_FOOTER_SIZE 6
@@ -75,6 +76,8 @@ extern const uint8_t firmware_signature_public_key_end[]    asm("_binary_firmwar
 
 // OTA Update task
 TaskHandle_t ota_task_handle = NULL;
+static TaskHandle_t ota_check_task_handle = NULL;
+static SemaphoreHandle_t ota_check_mutex = NULL;
 
 static unsigned int polling_day = 1;
 
@@ -84,6 +87,20 @@ static const char name_upgrade[] = "upgrade";
 static const char name_polling[] = "polling";
 
 static std::string ota_available_version = "N/A";
+
+static bool _is_https_url(const char *url)
+{
+    return url && strncmp(url, "https://", 8) == 0;
+}
+
+static bool _valid_image_url_template(const char *url)
+{
+    if (!_is_https_url(url)) {
+        return false;
+    }
+    const char *placeholder = strstr(url, "%s");
+    return placeholder && strstr(placeholder + 2, "%") == nullptr;
+}
 
 int ota_get_polling_period_day()
 {
@@ -99,11 +116,7 @@ static void _task_fatal_error()
 {
     ota_task_handle = NULL;
     ESP_LOGE(TAG, "Exiting task due to fatal error...");
-    (void)vTaskDelete(NULL);
-
-    while (1) {
-        ;
-    }
+    vTaskDelete(NULL);
 }
 
 /**
@@ -131,6 +144,7 @@ static void ota_task_func(void * command)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Firmware Upgrades Failed (%d)", ret);
         _task_fatal_error();
+        return;
     }
 
     ad2_printf_host(true, "%s Prepare to restart system!", TAG);
@@ -149,15 +163,18 @@ esp_err_t ota_api_get_available_version(char *update_info, unsigned int update_i
     char *latest_version = NULL;
     char *data = NULL;
     size_t str_len = 0;
+    char *polling_end = NULL;
+    unsigned long parsed_polling = 0;
 
     bool is_new_version = false;
 
     esp_err_t ret = ESP_OK;
 
-    if (!update_info) {
+    if (!update_info || !new_version || update_info_len == 0 || update_info_len >= OTA_VERSION_INFO_BUF_SIZE) {
         ESP_LOGE(TAG, "%s: Invalid parameter", __func__);
         return ESP_ERR_INVALID_ARG;
     }
+    *new_version = NULL;
 
     data = (char*)malloc((size_t) update_info_len + 1);
     if (!data) {
@@ -169,26 +186,44 @@ esp_err_t ota_api_get_available_version(char *update_info, unsigned int update_i
     data[update_info_len] = '\0';
 
     root = cJSON_Parse((char *)data);
+    if (!cJSON_IsObject(root)) {
+        ret = ESP_ERR_INVALID_RESPONSE;
+        goto clean_up;
+    }
     profile = cJSON_GetObjectItem(root, name_versioninfo);
-    if (!profile) {
-        ret = ESP_FAIL;
+    if (!cJSON_IsObject(profile)) {
+        ret = ESP_ERR_INVALID_RESPONSE;
         goto clean_up;
     }
 
     /* polling */
     item = cJSON_GetObjectItem(profile, name_polling);
-    if (!item) {
-        ret = ESP_FAIL;
+    if (!cJSON_IsString(item) || !item->valuestring) {
+        ret = ESP_ERR_INVALID_RESPONSE;
         goto clean_up;
     }
-    polling_day = atoi(cJSON_GetStringValue(item));
+    parsed_polling = strtoul(item->valuestring, &polling_end, 10);
+    if (polling_end == item->valuestring || *polling_end != '\0' || parsed_polling < 1 || parsed_polling > 30) {
+        ret = ESP_ERR_INVALID_RESPONSE;
+        goto clean_up;
+    }
+    polling_day = parsed_polling;
 
     _set_polling_period_day((unsigned int)polling_day);
 
     array = cJSON_GetObjectItem(profile, name_upgrade);
+    if (!cJSON_IsArray(array)) {
+        ret = ESP_ERR_INVALID_RESPONSE;
+        goto clean_up;
+    }
 
     for (int i = 0 ; i < cJSON_GetArraySize(array) ; i++) {
-        char *upgrade = cJSON_GetArrayItem(array, i)->valuestring;
+        cJSON *upgrade_item = cJSON_GetArrayItem(array, i);
+        if (!cJSON_IsString(upgrade_item) || !upgrade_item->valuestring) {
+            ret = ESP_ERR_INVALID_RESPONSE;
+            goto clean_up;
+        }
+        char *upgrade = upgrade_item->valuestring;
         if (strcmp(upgrade, ad2_firmware_version()) == 0) {
             is_new_version = true;
             break;
@@ -199,20 +234,24 @@ esp_err_t ota_api_get_available_version(char *update_info, unsigned int update_i
 
         /* latest */
         item = cJSON_GetObjectItem(profile, name_latest);
-        if (!item) {
+        if (!cJSON_IsString(item) || !item->valuestring || item->valuestring[0] == '\0') {
             ESP_LOGE(TAG, "%s: IOT_ERROR_UNINITIALIZED", __func__);
-            ret = ESP_FAIL;
+            ret = ESP_ERR_INVALID_RESPONSE;
             goto clean_up;
         }
 
-        str_len = strlen(cJSON_GetStringValue(item));
+        str_len = strlen(item->valuestring);
+        if (str_len > 63 || strpbrk(item->valuestring, "\r\n/\\%") != NULL) {
+            ret = ESP_ERR_INVALID_RESPONSE;
+            goto clean_up;
+        }
         latest_version = (char*)malloc(str_len + 1);
         if (!latest_version) {
             ESP_LOGE(TAG, "%s: Couldn't allocate memory to add latest version", __func__);
             ret = ESP_ERR_NO_MEM;
             goto clean_up;
         }
-        strncpy(latest_version, cJSON_GetStringValue(item), str_len);
+        strncpy(latest_version, item->valuestring, str_len);
         latest_version[str_len] = '\0';
         *new_version = latest_version;
     }
@@ -290,13 +329,10 @@ static void _print_sha256 (const uint8_t *image_hash, const char *label)
 
 static int _crypto_sha256(const unsigned char *src, size_t src_len, unsigned char *dst)
 {
-    int ret;
 #if defined(DEBUG_OTA)
     ESP_LOGI(TAG, "%s: src: %d@%p, dst: %p", __func__, src_len, src, dst);
 #endif
-    mbedtls_sha256(src, src_len, dst, 0);
-
-    return 1;
+    return mbedtls_sha256(src, src_len, dst, 0);
 }
 
 /**
@@ -422,8 +458,8 @@ esp_err_t ota_https_update_device(const char *buildflags)
 #endif
     esp_err_t ret = ESP_FAIL;
     bool b_ctx_init = false;
-    unsigned int content_len;
-    unsigned int firmware_len;
+    int64_t content_len = 0;
+    size_t firmware_len = 0;
     unsigned char *sig_ptr = NULL;
     unsigned char *sig = NULL;
     unsigned int sig_len = 0;
@@ -431,21 +467,26 @@ esp_err_t ota_https_update_device(const char *buildflags)
     unsigned int remain_len = 0;
     unsigned int excess_len = 0;
     esp_ota_handle_t update_handle = 0;
+    bool ota_started = false;
     const esp_partition_t *update_partition = NULL;
     unsigned char md[OTA_CRYPTO_SHA256_LEN] = {0,};
     esp_err_t ota_write_err = ESP_OK;
     mbedtls_sha256_context ctx;
     char *upgrade_data_buf = nullptr;
-
-    esp_http_client_config_t* config = (esp_http_client_config_t*)calloc(sizeof(esp_http_client_config_t), 1);
+    esp_http_client_handle_t client = NULL;
     std::string fwfile = ad2_string_printf(CONFIG_FIRMWARE_UPGRADE_URL_FMT, buildflags);
-    config->url = fwfile.c_str();
-    config->timeout_ms = OTA_SOCKET_TIMEOUT;
-    config->transport_type = HTTP_TRANSPORT_OVER_SSL;
-    config->event_handler = _http_event_handler;
+    if (!_valid_image_url_template(CONFIG_FIRMWARE_UPGRADE_URL_FMT) || !_is_https_url(fwfile.c_str())) {
+        ESP_LOGE(TAG, "%s: OTA image URL template must be HTTPS and contain exactly one %%s", __func__);
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_http_client_config_t config = {};
+    config.url = fwfile.c_str();
+    config.timeout_ms = OTA_SOCKET_TIMEOUT;
+    config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+    config.event_handler = _http_event_handler;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
 
-
-    esp_http_client_handle_t client = esp_http_client_init(config);
+    client = esp_http_client_init(&config);
     if (client == NULL) {
         ESP_LOGE(TAG, "%s: Failed to initialise HTTP connection", __func__);
         goto clean_up;
@@ -468,7 +509,7 @@ esp_err_t ota_https_update_device(const char *buildflags)
         goto clean_up;
     }
 
-    firmware_len = content_len - (OTA_DEFAULT_SIGNATURE_BUF_SIZE);
+    firmware_len = (size_t)content_len - OTA_DEFAULT_SIGNATURE_BUF_SIZE;
 
     update_partition = esp_ota_get_next_update_partition(NULL);
     if (update_partition == NULL) {
@@ -476,15 +517,22 @@ esp_err_t ota_https_update_device(const char *buildflags)
         ret = ESP_FAIL;
         goto clean_up;
     }
+    if (firmware_len > update_partition->size) {
+        ESP_LOGE(TAG, "%s: firmware is %u bytes but OTA slot is only %u bytes", __func__,
+                 (unsigned int)firmware_len, (unsigned int)update_partition->size);
+        ret = ESP_ERR_INVALID_SIZE;
+        goto clean_up;
+    }
 #if defined(DEBUG_OTA)
     ESP_LOGI(TAG, "%s: Writing to partition subtype %d at offset 0x%x", __func__,
              update_partition->subtype, update_partition->address);
 #endif
-    ret = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
+    ret = esp_ota_begin(update_partition, firmware_len, &update_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "%s: esp_ota_begin failed, error=%d", __func__, ret);
         goto clean_up;
     }
+    ota_started = true;
 
     upgrade_data_buf = (char *)malloc(OTA_DEFAULT_BUF_SIZE);
     if (!upgrade_data_buf) {
@@ -563,11 +611,20 @@ esp_err_t ota_https_update_device(const char *buildflags)
         goto clean_up;
     }
 
-    ret = esp_ota_end(update_handle);
     if (ota_write_err != ESP_OK) {
         ESP_LOGE(TAG, "%s: esp_ota_write failed! err=0x%d", __func__, ota_write_err);
+        ret = ota_write_err;
         goto clean_up;
-    } else if (ret != ESP_OK) {
+    }
+    if (total_read_len != firmware_len || sig_len != OTA_DEFAULT_SIGNATURE_BUF_SIZE) {
+        ESP_LOGE(TAG, "%s: truncated or malformed signed image", __func__);
+        ret = ESP_ERR_INVALID_SIZE;
+        goto clean_up;
+    }
+
+    ret = esp_ota_end(update_handle);
+    ota_started = false;
+    if (ret != ESP_OK) {
         ESP_LOGE(TAG, "%s: esp_ota_end failed! err=0x%d. Image is invalid", __func__, ret);
         goto clean_up;
     }
@@ -582,6 +639,9 @@ esp_err_t ota_https_update_device(const char *buildflags)
     ESP_LOGI(TAG, "%s: esp_ota_set_boot_partition succeeded", __func__);
 #endif
 clean_up:
+    if (ota_started) {
+        esp_ota_abort(update_handle);
+    }
     if (b_ctx_init) {
         mbedtls_sha256_free(&ctx);
     }
@@ -612,15 +672,20 @@ clean_up:
 esp_err_t ota_https_read_version_info(char **version_info, unsigned int *version_info_len)
 {
     esp_err_t ret = ESP_FAIL;
+    if (!version_info || !version_info_len || !_is_https_url(CONFIG_FIRMWARE_VERSION_INFO_URL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *version_info = NULL;
+    *version_info_len = 0;
 
-    esp_http_client_config_t* config = (esp_http_client_config_t*)calloc(sizeof(esp_http_client_config_t), 1);
-    config->url = CONFIG_FIRMWARE_VERSION_INFO_URL;
-    config->timeout_ms = OTA_SOCKET_TIMEOUT;
-    config->transport_type = HTTP_TRANSPORT_OVER_SSL;
-    config->event_handler = _http_event_handler;
+    esp_http_client_config_t config = {};
+    config.url = CONFIG_FIRMWARE_VERSION_INFO_URL;
+    config.timeout_ms = OTA_SOCKET_TIMEOUT;
+    config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+    config.event_handler = _http_event_handler;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
 
-    esp_http_client_handle_t client = esp_http_client_init(config);
-    free(config);
+    esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {
         ESP_LOGE(TAG, "%s: Failed to initialise HTTP connection", __func__);
         return ESP_FAIL;
@@ -628,6 +693,7 @@ esp_err_t ota_https_read_version_info(char **version_info, unsigned int *version
 
     if (esp_http_client_get_transport_type(client) != HTTP_TRANSPORT_OVER_SSL) {
         ESP_LOGE(TAG, "%s: Transport is not over HTTPS", __func__);
+        esp_http_client_cleanup(client);
         return ESP_FAIL;
     }
 
@@ -637,7 +703,11 @@ esp_err_t ota_https_read_version_info(char **version_info, unsigned int *version
         ESP_LOGE(TAG, "%s: Failed to open HTTP connection: %d", __func__, ret);
         return ret;
     }
-    esp_http_client_fetch_headers(client);
+    const int64_t content_len = esp_http_client_fetch_headers(client);
+    if (content_len <= 0 || content_len >= OTA_VERSION_INFO_BUF_SIZE) {
+        _http_cleanup(client);
+        return ESP_ERR_INVALID_SIZE;
+    }
 
     char *upgrade_data_buf = (char *)malloc(OTA_DEFAULT_BUF_SIZE);
     if (!upgrade_data_buf) {
@@ -668,6 +738,7 @@ esp_err_t ota_https_read_version_info(char **version_info, unsigned int *version
         }
         if (data_read < 0) {
             ESP_LOGE(TAG, "%s: Error: SSL data read error", __func__);
+            total_read_len = 0;
             break;
         }
         if (data_read > 0) {
@@ -706,83 +777,90 @@ esp_err_t ota_https_read_version_info(char **version_info, unsigned int *version
  *
  * @param [in]arg void * passed in on init
  */
+static esp_err_t _ota_check_once()
+{
+    if (ota_task_handle != NULL || !hal_get_netif_started()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!ota_check_mutex) {
+        ota_check_mutex = xSemaphoreCreateMutex();
+    }
+    if (!ota_check_mutex || xSemaphoreTake(ota_check_mutex, 0) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char *read_data = NULL;
+    unsigned int read_data_len = 0;
+    char *available_version = NULL;
+    esp_err_t ret = ota_https_read_version_info(&read_data, &read_data_len);
+    if (ret == ESP_OK) {
+        ret = ota_api_get_available_version(read_data, read_data_len, &available_version);
+    }
+    free(read_data);
+
+    if (ret == ESP_OK) {
+        const std::string discovered_version = available_version ? available_version : ad2_firmware_version();
+        const bool changed = ota_available_version != discovered_version;
+        ota_available_version = discovered_version;
+        if (changed) {
+            AD2Parse.updateVersion((char *)ota_available_version.c_str());
+        }
+        ESP_LOGI(TAG, "Available firmware version is '%s'", ota_available_version.c_str());
+    }
+    free(available_version);
+    xSemaphoreGive(ota_check_mutex);
+    return ret;
+}
+
+static void ota_check_task_func(void *arg)
+{
+    esp_err_t ret = _ota_check_once();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Firmware update check did not complete: %s", esp_err_to_name(ret));
+    }
+    ota_check_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
 static void ota_polling_task_func(void *arg)
 {
-    uint32_t delay = OTA_FIRST_CHECK_DELAY_MS;
-    static int fail_count = 0;
+    uint32_t delay_ms = OTA_FIRST_CHECK_DELAY_MS;
+    unsigned int fail_count = 0;
     while (1) {
-        // failed too many times skip for 24h
-        if (fail_count > 2) {
-            fail_count--;
-            delay =  24 * 3600;
-        }
-#if defined(AD2_STACK_REPORT)
-#define EXTRA_INFO_EVERY 1
-        static int extra_info = EXTRA_INFO_EVERY;
-        if(!--extra_info) {
-            extra_info = EXTRA_INFO_EVERY;
-            ESP_LOGI(TAG, "ota_polling_task_function stack free %d", uxTaskGetStackHighWaterMark(NULL));
-        }
-#endif
-
-        vTaskDelay(delay / portTICK_PERIOD_MS);
-
-        ESP_LOGI(TAG, "Starting check new version with current version '%s'-%s",
-                 ad2_firmware_version(), FIRMWARE_BUILDFLAGS);
-
-        if (ota_task_handle != NULL) {
-            ESP_LOGI(TAG, "Device is currently updating skipping checks for now.");
-            continue;
-        }
-
-        if (!hal_get_netif_started()) {
-            ESP_LOGI(TAG, "Device update check aborted. Network interface not started.");
-            delay = OTA_RETRY_CHECK_DELAY_MS;
-            fail_count++;
-            continue;
-        }
-
-        char *read_data = NULL;
-        unsigned int read_data_len = 0;
-
-        esp_err_t ret = ota_https_read_version_info(&read_data, &read_data_len);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        const esp_err_t ret = _ota_check_once();
         if (ret == ESP_OK) {
-            char *available_version = NULL;
-            esp_err_t err = ota_api_get_available_version(read_data, read_data_len, &available_version);
-            if (read_data) {
-                free(read_data);
-                read_data = NULL;
-            }
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "ota_api_get_available_version failed : %d", err);
-                if (available_version) {
-                    free(available_version);
-                }
-                fail_count++;
-                continue;
-            }
-
-            // reset fail count upon success
             fail_count = 0;
-
-            // Update and notify subscribers of a new version
-            if (available_version) {
-                ota_available_version = available_version;
-                AD2Parse.updateVersion(available_version);
-                ESP_LOGI(TAG, "Get available version found '%s' on the server.", available_version);
-                free(available_version);
-            } else {
-                // if nothing available then it must be the same we have installed.
-                ota_available_version = ad2_firmware_version();
-                ESP_LOGI(TAG, "Get available version found NO available version on the server.");
-            }
+            delay_ms = (uint32_t)((uint64_t)ota_get_polling_period_day() * 24ULL * 60ULL * 60ULL * 1000ULL);
+        } else if (++fail_count > 2) {
+            delay_ms = 24U * 60U * 60U * 1000U;
+        } else {
+            delay_ms = OTA_RETRY_CHECK_DELAY_MS;
         }
-
-        /* Get polling period in days from server response and set it */
-        unsigned int polling_day = ota_get_polling_period_day();
-        unsigned int task_delay_sec = polling_day * 24 * 3600;
-        vTaskDelay(task_delay_sec * 1000 / portTICK_PERIOD_MS);
     }
+}
+
+void ota_check_for_update()
+{
+    if (ota_check_task_handle || ota_task_handle) {
+        ESP_LOGW(TAG, "A firmware check or update is already in progress");
+        return;
+    }
+    if (xTaskCreate(ota_check_task_func, "AD2 OTA Check", 1024 * 5, NULL,
+                    tskIDLE_PRIORITY + 1, &ota_check_task_handle) != pdPASS) {
+        ota_check_task_handle = NULL;
+        ESP_LOGE(TAG, "Unable to create firmware check task");
+    }
+}
+
+bool ota_update_in_progress()
+{
+    return ota_task_handle != NULL;
+}
+
+const char *ota_get_available_version()
+{
+    return ota_available_version == "N/A" ? ad2_firmware_version() : ota_available_version.c_str();
 }
 
 /**
@@ -794,7 +872,13 @@ void ota_do_update(const char *command)
         ESP_LOGW(TAG, "Device is currently updating.");
         return;
     }
-    xTaskCreate(&ota_task_func, "AD2 OTA Update", 1024*8, strdup(command), tskIDLE_PRIORITY+2, &ota_task_handle);
+    char *task_command = command ? strdup(command) : NULL;
+    if (xTaskCreate(&ota_task_func, "AD2 OTA Update", 1024*8, task_command,
+                    tskIDLE_PRIORITY+2, &ota_task_handle) != pdPASS) {
+        free(task_command);
+        ota_task_handle = NULL;
+        ESP_LOGE(TAG, "Unable to create firmware update task");
+    }
 }
 
 /**
