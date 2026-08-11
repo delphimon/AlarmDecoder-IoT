@@ -111,6 +111,12 @@ class SecurityDefaultsTests(unittest.TestCase):
         self.assertIn("synced", handler)
         self.assertIn("webui_origin_allowed(req)", handler)
 
+    def test_websocket_history_does_not_duplicate_the_printed_json(self) -> None:
+        start = self.webui_source.index('std::string key_history = "!HISTORY:"')
+        history = self.webui_source[start : start + 1200]
+        self.assertIn("webui_ws_send_text(req, history, strlen(history))", history)
+        self.assertNotIn("std::string response = history", history)
+
     def test_maintenance_actions_require_origin_and_custom_header(self) -> None:
         start = self.webui_source.index("webui_action_handler(httpd_req_t *req)")
         handler = self.webui_source[start : start + 2600]

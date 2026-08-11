@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1117` after the repeatable two-session hardware smoke test exposed a 3,548-byte heap low-water mark during WSS history generation.
+- [x] PERFORMANCE/WEBUI: send the cJSON history print buffer directly as a WebSocket text frame instead of duplicating it in a `std::string` while the history tree and second TLS session are still allocated.
+- [x] TEST/HARDWARE: add a dependency-free, read-only HTTPS/WSS smoke tool that loads local INI credentials without printing them, verifies certificate trust/authentication/redaction/version/uptime, and measures the browser-equivalent two-session workload; verify AD2IOT-1117 improves minimum heap from 3,548 to 23,608 bytes with zero request errors or reboots.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1116` after repeated config reads showed that AD2IOT-1115's full-file response buffer could still panic under the two-session TLS workload.
 - [x] PERFORMANCE/WEBUI: replace full-buffer active/SPIFFS/SD config responses with a two-pass redacted chunked streamer, bounding each line to 1 KiB and retaining reused-secret scrubbing without holding the 20+ KiB file in heap.
 - [x] TEST/HARDWARE: install AD2IOT-1116 through the validated SD updater and verify authenticated HTTPS/WSS, complete 401 responses, redacted active/SPIFFS/SD configuration, network-CLI logs, and a bounded two-session workload with zero request errors or panics.

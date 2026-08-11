@@ -561,14 +561,19 @@ static void ws_alarmstate_async_send(void *arg)
     }
 }
 
-static esp_err_t webui_ws_send_text(httpd_req_t *req, const std::string &text)
+static esp_err_t webui_ws_send_text(httpd_req_t *req, const char *text, size_t length)
 {
     httpd_ws_frame_t response;
     memset(&response, 0, sizeof(response));
     response.type = HTTPD_WS_TYPE_TEXT;
-    response.payload = (uint8_t *)text.c_str();
-    response.len = text.length();
+    response.payload = (uint8_t *)text;
+    response.len = length;
     return httpd_ws_send_frame(req, &response);
+}
+
+static esp_err_t webui_ws_send_text(httpd_req_t *req, const std::string &text)
+{
+    return webui_ws_send_text(req, text.c_str(), text.length());
 }
 
 static esp_err_t webui_ws_error(httpd_req_t *req, const char *message)
@@ -673,10 +678,16 @@ esp_err_t ad2ws_handler(httpd_req_t *req)
             }
             cJSON *root = webui_history_json((size_t)limit, -1);
             char *history = cJSON_PrintUnformatted(root);
-            std::string response = history ? history : "{\"event\":\"HISTORY\",\"items\":[]}";
+            esp_err_t result;
+            if (history) {
+                result = webui_ws_send_text(req, history, strlen(history));
+            } else {
+                const char *empty_history = "{\"event\":\"HISTORY\",\"items\":[]}";
+                result = webui_ws_send_text(req, empty_history, strlen(empty_history));
+            }
             cJSON_free(history);
             cJSON_Delete(root);
-            return webui_ws_send_text(req, response);
+            return result;
         }
 
         std::string key_send = "!SEND:";
