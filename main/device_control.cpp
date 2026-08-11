@@ -64,9 +64,6 @@ void _lost_ip_event_handler(void *arg, esp_event_base_t event_base,
                             int32_t event_id, void *event_data);
 
 
-// track count of AP client connection attempts.
-static int ap_retry_num = 0;
-
 static esp_netif_t* _netif = NULL;
 
 
@@ -291,18 +288,20 @@ void hal_change_led_mode(int mode)
  */
 void hal_gpio_init(void)
 {
-    gpio_config_t io_conf;
+#if (GPIO_MAINLED != GPIO_NOT_USED) || (GPIO_INPUT_BUTTON != GPIO_NOT_USED)
+    gpio_config_t io_conf = {};
+#endif
 
     // output main led if enabled
 #if (GPIO_MAINLED != GPIO_NOT_USED)
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (gpio_num_t) 1 << GPIO_MAINLED;
+    io_conf.pin_bit_mask = 1ULL << GPIO_MAINLED;
     io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     gpio_config(&io_conf);
 #if (GPIO_MAINLED_0 != GPIO_NOT_USED)
-    io_conf.pin_bit_mask = (gpio_num_t) 1 << GPIO_MAINLED_0;
+    io_conf.pin_bit_mask = 1ULL << GPIO_MAINLED_0;
     gpio_config(&io_conf);
     gpio_set_level((gpio_num_t)GPIO_MAINLED_0, 0);
 #endif
@@ -318,7 +317,7 @@ void hal_gpio_init(void)
 #if (GPIO_INPUT_BUTTON != GPIO_NOT_USED)
     io_conf.intr_type = GPIO_INTR_ANYEDGE;
     io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = 1 << GPIO_INPUT_BUTTON;
+    io_conf.pin_bit_mask = 1ULL << GPIO_INPUT_BUTTON;
     io_conf.pull_down_en = (BUTTON_GPIO_RELEASED == 0 ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE);
     io_conf.pull_up_en = (BUTTON_GPIO_RELEASED == 1 ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE);
     gpio_config(&io_conf);
@@ -340,28 +339,54 @@ void hal_restart()
 /**
  * @brief restart the hardware
  */
-void hal_factory_reset()
+bool hal_factory_reset(bool erase_sd_config)
 {
-    ad2_printf_host(true, "Reseting to factor defaults. ");
-    nvs_flash_erase();
+    const char *sd_config = "/" AD2_USD_MOUNT_POINT "/ad2iot.ini";
+    if (g_uSD_mounted && access(sd_config, F_OK) == 0) {
+        if (!erase_sd_config) {
+            ad2_printf_host(true,
+                            "Factory reset refused: %s overrides internal defaults. Remove the card or use 'factory-reset ERASE-SD'.",
+                            sd_config);
+            return false;
+        }
+        if (::unlink(sd_config) != 0) {
+            ad2_printf_host(true, "Factory reset failed removing %s: %s", sd_config, strerror(errno));
+            return false;
+        }
+        ad2_printf_host(true, "Removed overriding SD configuration %s.", sd_config);
+    }
 
-    // delete the config file
-    ::unlink("/" AD2_SPIFFS_MOUNT_POINT "/ad2iot.ini");
+    ad2_printf_host(true, "Resetting to factory defaults.");
+    esp_err_t err = nvs_flash_erase();
+    if (err != ESP_OK) {
+        ad2_printf_host(true, "Factory reset failed erasing NVS: %s", esp_err_to_name(err));
+        return false;
+    }
 
-    // create simple ini.
+    // Truncate or create the internal configuration only after removable-media
+    // precedence has been handled explicitly.
     FILE* f = fopen("/" AD2_SPIFFS_MOUNT_POINT "/ad2iot.ini", "w");
+    if (!f) {
+        ad2_printf_host(true, "Factory reset failed writing internal configuration: %s", strerror(errno));
+        return false;
+    }
     fprintf(f, "#AD2IoT config file\r\n");
     fprintf(f, "ad2source = C 4:36\r\n");
     fprintf(f, "netmode = E mode=d\r\n");
     fprintf(f, "logmode = I\r\n");
 #if CONFIG_AD2IOT_FTP_DAEMON
     fprintf(f, "[ftpd]\r\n");
-    fprintf(f, "enable = true\r\n");
+    fprintf(f, "enable = false\r\n");
+    fprintf(f, "acl = 127.0.0.1\r\n");
 #endif
-    fclose(f);
+    if (fclose(f) != 0) {
+        ad2_printf_host(true, "Factory reset failed closing internal configuration: %s", strerror(errno));
+        return false;
+    }
 
     ad2_printf_host(false, "Restarting now.");
     esp_restart();
+    return true;
 }
 
 /**
@@ -465,7 +490,7 @@ void hal_init_wifi(std::string &args)
     io_conf.mode = GPIO_MODE_OUTPUT;
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    io_conf.pin_bit_mask = (gpio_num_t) 1 << CONFIG_AD2IOT_ETH_PHY_POWER_GPIO;
+    io_conf.pin_bit_mask = 1ULL << CONFIG_AD2IOT_ETH_PHY_POWER_GPIO;
     gpio_config(&io_conf);
     gpio_set_level((gpio_num_t)CONFIG_AD2IOT_ETH_PHY_POWER_GPIO, SWITCH_OFF);
 #endif
@@ -505,14 +530,25 @@ void hal_init_wifi(std::string &args)
     res = AD2Parse.query_key_value_string(args, "SID", value);
     if (res <= 0) {
         ESP_LOGE(TAG, "Error loading SID value from netmode arg");
+        return;
     }
-    strcpy((char*)sta_config.sta.ssid, value.c_str());
+    if (value.length() > sizeof(sta_config.sta.ssid)) {
+        ESP_LOGE(TAG, "WiFi SID is too long (%u bytes; maximum %u)",
+                 value.length(), sizeof(sta_config.sta.ssid));
+        return;
+    }
+    memcpy(sta_config.sta.ssid, value.data(), value.length());
 
     res = AD2Parse.query_key_value_string(args, "PASSWORD", value);
-    if (res <= 0) {
-        ESP_LOGE(TAG, "Error loading PASSWORD value from netmode arg");
+    if (res < 0) {
+        value.clear();
     }
-    strcpy((char*)sta_config.sta.password, value.c_str());
+    if (value.length() > sizeof(sta_config.sta.password)) {
+        ESP_LOGE(TAG, "WiFi PASSWORD is too long (%u bytes; maximum %u)",
+                 value.length(), sizeof(sta_config.sta.password));
+        return;
+    }
+    memcpy(sta_config.sta.password, value.data(), value.length());
 
     sta_config.sta.bssid_set = false;
 
@@ -604,22 +640,22 @@ void hal_init_eth(std::string &args)
 #if 0 // FIXME Ethernet broken not sure if issue in newer ESP-IDF or what I did. I Expect the prior.
     // High impedance to MODE select pins on LAN8710A MODEX pins.
     io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = (gpio_num_t) 1 << GPIO_ETH_PHY_MODE0;
+    io_conf.pin_bit_mask = 1ULL << GPIO_ETH_PHY_MODE0;
     gpio_config(&io_conf);
     gpio_set_level((gpio_num_t)GPIO_ETH_PHY_MODE0, SWITCH_OFF);
 
-    io_conf.pin_bit_mask = (gpio_num_t) 1 << GPIO_ETH_PHY_MODE1;
+    io_conf.pin_bit_mask = 1ULL << GPIO_ETH_PHY_MODE1;
     gpio_config(&io_conf);
     gpio_set_level((gpio_num_t)GPIO_ETH_PHY_MODE1, SWITCH_OFF);
 
-    io_conf.pin_bit_mask = (gpio_num_t) 1 << GPIO_ETH_PHY_MODE2;
+    io_conf.pin_bit_mask = 1ULL << GPIO_ETH_PHY_MODE2;
     gpio_config(&io_conf);
     gpio_set_level((gpio_num_t)GPIO_ETH_PHY_MODE2, SWITCH_OFF);
 #endif
 
     // Enable power to the PHY chip on the ESP32-POE-ISO.
 #if (CONFIG_AD2IOT_ETH_PHY_POWER_GPIO != GPIO_NOT_USED)
-    io_conf.pin_bit_mask = (gpio_num_t) 1 << CONFIG_AD2IOT_ETH_PHY_POWER_GPIO;
+    io_conf.pin_bit_mask = 1ULL << CONFIG_AD2IOT_ETH_PHY_POWER_GPIO;
     io_conf.mode = GPIO_MODE_OUTPUT;
     gpio_config(&io_conf);
     gpio_set_level((gpio_num_t)CONFIG_AD2IOT_ETH_PHY_POWER_GPIO, SWITCH_ON);
@@ -877,7 +913,7 @@ void hal_ad2_reset()
     gpio_config_t io_conf;
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (gpio_num_t) 1 << GPIO_AD2_RESET;
+    io_conf.pin_bit_mask = 1ULL << GPIO_AD2_RESET;
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     gpio_config(&io_conf);
@@ -983,14 +1019,17 @@ bool hal_init_sd_card()
     } else {
         ad2_printf_host(false, " pass.");
         // show stats and return true
-        FATFS *fs;
+        FATFS *fs = NULL;
         DWORD fre_clust, fre_sect, tot_sect;
-        FRESULT res;
-        res = f_getfree("0:", &fre_clust, &fs);
-        tot_sect = (fs->n_fatent - 2) * fs->csize;
-        fre_sect = fre_clust * fs->csize;
-        ad2_printf_host(true, "%s: uSD fat32 partition size: %10lu KiB,  free: %10lu KiB.", TAG,
-                        tot_sect / 2, fre_sect / 2);
+        FRESULT res = f_getfree("0:", &fre_clust, &fs);
+        if (res == FR_OK && fs != NULL) {
+            tot_sect = (fs->n_fatent - 2) * fs->csize;
+            fre_sect = fre_clust * fs->csize;
+            ad2_printf_host(true, "%s: uSD fat32 partition size: %10lu KiB,  free: %10lu KiB.", TAG,
+                            tot_sect / 2, fre_sect / 2);
+        } else {
+            ESP_LOGW(TAG, "uSD mounted but free-space query failed: %d", res);
+        }
         return true;
     }
 }

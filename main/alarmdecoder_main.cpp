@@ -320,7 +320,6 @@ void SER2SOCKD_ON_RAW_RX_DATA(uint8_t *buffer, size_t s, void *arg)
  */
 void ad2_on_state_change(std::string *msg, AD2PartitionState *s, void *arg)
 {
-    int msg_id;
     if (s) {
         cJSON *root = ad2_get_partition_state_json(s);
         cJSON_AddStringToObject(root, "event", AD2Parse.event_str[(int)arg].c_str());

@@ -398,7 +398,18 @@ static void _cli_cmd_restart_event(const char *string)
  */
 static void _cli_cmd_factory_reset_event(const char *string)
 {
-    hal_factory_reset();
+    std::string confirmation;
+    bool erase_sd = false;
+    if (ad2_copy_nth_arg(confirmation, string, 1) >= 0) {
+        ad2_ucase(confirmation);
+        if (confirmation != "ERASE-SD") {
+            ad2_printf_host(false,
+                            "Factory reset not started. Use 'factory-reset ERASE-SD' to explicitly remove an overriding SD configuration.\r\n");
+            return;
+        }
+        erase_sd = true;
+    }
+    hal_factory_reset(erase_sd);
 }
 
 /**
@@ -908,9 +919,11 @@ static struct cli_command cmd_list[] = {
     },
     {
         (char*)AD2_CMD_FACTORY,(char*)
-        "Usage: factory-reset"
+        "Usage: factory-reset [ERASE-SD]"
         "\r\n"
-        "    Erase config storage and reboot to factory defaults\r\n"
+        "    Erase internal config storage and reboot to safe factory defaults.\r\n"
+        "    Refuses to continue if /sdcard/ad2iot.ini would override the reset.\r\n"
+        "    ERASE-SD explicitly removes that SD configuration before reset.\r\n"
         , _cli_cmd_factory_reset_event
     }
 };

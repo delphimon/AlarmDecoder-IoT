@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
-- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1111`; `version.txt` remains the single runtime version source.
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1112`; `version.txt` remains the single runtime version source.
+- [x] CI: repair clean GitHub runner builds by using Python 3.12 and pinning `setuptools` 80.9.0 for the Espressif32 6.4 builder's `pkg_resources` dependency; verify the replacement GitHub run completes successfully.
+- [x] SECURITY/FTPD: disable FTP by default, require a 1-32 character username and 8-64 character password, default missing ACLs to loopback, reject malformed ACLs without replacing the active ACL, and refuse startup unless credentials and ACL are valid.
+- [x] RELIABILITY: bound Wi-Fi SSID/password copies, use 64-bit GPIO masks, validate SD free-space queries, and make factory reset refuse an overriding SD configuration unless `ERASE-SD` is explicitly requested.
+- [x] MAINTENANCE: replace deprecated C++ trimming adapters and remove newly audited unused/dead declarations without changing behavior.
+- [x] TEST: add dependency-free host regression tests for externally reachable service defaults and release-package checksums, and require them in CI before firmware compilation.
 - [x] CI/RELEASE: add pull-request validation, pin PlatformIO/Python/action versions, cache PlatformIO packages, apply least-privilege permissions and timeouts, and consolidate release publishing onto the reusable firmware-build workflow.
 - [x] CI/RELEASE: validate version/changelog/web inputs, syntax-check browser JavaScript, package the SD-card web/certificate bundle, fail on missing binaries, and generate `SHA256SUMS` plus versioned artifact/archive names.
 - [x] DOCS: refresh `PROJECT_REVIEW.md` against `AD2IOT-1111`, reconcile the current feature inventory, and explicitly rank the security, reliability, and toolchain backlog. SmartThings is deferred and excluded from this review cycle.
@@ -20,10 +25,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### High-priority backlog
 - [ ] SECURITY: require authentication and authorization for web alarm controls and diagnostic/configuration APIs; do not rely on an allow-all IP ACL.
-- [ ] SECURITY: disable unauthenticated FTP by default, require credentials, and prevent FTP-triggered installation of unsigned firmware.
+- [x] SECURITY: disable unauthenticated FTP by default and require credentials plus a valid ACL before startup.
+- [ ] SECURITY: independently authorize firmware installation and prevent installation of unsigned, wrong-board, or disallowed-downgrade firmware, including through FTP.
 - [ ] SECURITY: enable outbound TLS peer verification and add signed firmware, downgrade policy, and boot rollback before treating remote or SD updates as trusted.
-- [ ] RELIABILITY: bound Wi-Fi SSID/password copies, make factory reset handle the higher-priority SD configuration safely, and centralize restart cleanup.
-- [ ] TEST: add host-side parser/configuration/security tests and hardware-in-loop smoke coverage; CI currently proves compilation and package integrity only.
+- [x] RELIABILITY: bound Wi-Fi SSID/password copies and make factory reset handle the higher-priority SD configuration safely.
+- [ ] RELIABILITY: centralize restart cleanup across network, storage, and integration services.
+- [ ] TEST: expand the initial host security/package regression suite with parser, redaction, path, and action-authorization tests plus hardware-in-loop smoke coverage.
 - [ ] TOOLCHAIN: migrate from PlatformIO Espressif32 6.4/ESP-IDF 5.1.1 to 6.13/ESP-IDF 5.5.3 in a dedicated compatibility change, then evaluate Espressif32 7/ESP-IDF 6 separately.
 - [ ] TOOLCHAIN: compatibility-test updates from SimpleIni 4.19 to 4.26 and `{fmt}` 8.0.1 to 12.2.0.
 - [ ] STYLE: add a non-mutating format/style check after agreeing on a repository-wide baseline; the existing tree is not yet style-clean.

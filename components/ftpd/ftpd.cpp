@@ -46,8 +46,14 @@ extern "C" {
 #define FTPD_COMMAND          "ftpd"
 #define FTPD_SUBCMD_ENABLE    "enable"
 #define FTPD_SUBCMD_ACL       "acl"
+#define FTPD_SUBCMD_USER      "user"
+#define FTPD_SUBCMD_PASSWORD  "password"
 
 #define FTPD_CONFIG_SECTION   "ftpd"
+#define FTPD_DEFAULT_ACL      "127.0.0.1"
+#define FTPD_MIN_PASSWORD_LEN 8
+#define FTPD_MAX_PASSWORD_LEN 64
+#define FTPD_MAX_USER_LEN     32
 
 // enable verbose debug logging
 //#define FTPD_DEBUG
@@ -58,12 +64,16 @@ extern "C" {
 char * FTPD_SUBCMD [] = {
     (char*)FTPD_SUBCMD_ENABLE,
     (char*)FTPD_SUBCMD_ACL,
+    (char*)FTPD_SUBCMD_USER,
+    (char*)FTPD_SUBCMD_PASSWORD,
     0 // EOF
 };
 
 enum {
     FTPD_SUBCMD_ENABLE_ID = 0,
     FTPD_SUBCMD_ACL_ID,
+    FTPD_SUBCMD_USER_ID,
+    FTPD_SUBCMD_PASSWORD_ID,
 };
 
 class FTPDCallbacks
@@ -203,6 +213,13 @@ public:
 static FTPD *ad2ftpd = nullptr;
 static ad2_acl_check ad2ftpd_acl;     // ACL control
 static std::string ad2ftpd_cwd;       // current directory
+
+static bool ftpd_credentials_valid(const std::string &userid, const std::string &password)
+{
+    return !userid.empty() && userid.length() <= FTPD_MAX_USER_LEN &&
+           password.length() >= FTPD_MIN_PASSWORD_LEN &&
+           password.length() <= FTPD_MAX_PASSWORD_LEN;
+}
 
 /**
  * @brief format a file / path line response for LIST command.
@@ -874,7 +891,7 @@ void FTPD::onRnfr(std::istringstream &ss)
 #if defined(FTPD_DEBUG)
     ESP_LOGI(TAG, "onRnfr('%s') '%s'", path.c_str(), tp.c_str());
 #endif
-    if (!S_ISDIR(s.st_mode) && !S_ISREG(s.st_mode)) {
+    if (err != 0 || (!S_ISDIR(s.st_mode) && !S_ISREG(s.st_mode))) {
         sendResponse(FTPD::RESPONSE_550_ACTION_NOT_TAKEN);
         return;
     }
@@ -1548,7 +1565,11 @@ void FTPD::sendResponse(int code, std::string text)
 {
     std::ostringstream ss;
     ss << code << " " << text << "\r\n";
-    int rc = send(m_clientSocket, ss.str().data(), ss.str().length(), 0);
+    const std::string response = ss.str();
+    int rc = send(m_clientSocket, response.data(), response.length(), 0);
+    if (rc < 0 || static_cast<size_t>(rc) != response.length()) {
+        ESP_LOGW(TAG, "FTPD::sendResponse: incomplete send: %s", rc < 0 ? strerror(errno) : "short write");
+    }
 }
 
 /**
@@ -1641,14 +1662,6 @@ void FTPD::setPort(uint16_t port)
  */
 void FTPD::start()
 {
-#if CONFIG_LWIP_IPV6
-    int addr_family = AF_INET6;
-    struct sockaddr_in6 dest_addr;
-#else
-    int addr_family = AF_INET;
-    struct sockaddr_in dest_addr;
-#endif
-
     m_serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (m_serverSocket == -1) {
         ESP_LOGE(TAG, "Failed to create listen socket. Exiting with error: %s", strerror(errno));
@@ -1761,14 +1774,25 @@ static void _cli_cmd_ftpd_event(const char *string)
         if(subcmd.compare(FTPD_SUBCMD[i]) == 0) {
             std::string arg;
             std::string acl;
+            std::string userid;
+            std::string password;
             switch(i) {
             /**
              * Enable/Disable ftp daemon.
              */
             case FTPD_SUBCMD_ENABLE_ID:
-                if (ad2_copy_nth_arg(arg, string, 2) >= 0) {
-                    ad2_set_config_key_bool(FTPD_CONFIG_SECTION, FTPD_SUBCMD_ENABLE, (arg[0] == 'Y' || arg[0] ==  'y'));
-                    ad2_printf_host(false, "Success setting value. Restart required to take effect.\r\n");
+                if (ad2_copy_nth_arg(arg, string, 2) >= 0 && !arg.empty()) {
+                    bool requested_enable = (arg[0] == 'Y' || arg[0] == 'y');
+                    ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_USER, userid);
+                    ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_PASSWORD, password);
+                    if (requested_enable && !ftpd_credentials_valid(userid, password)) {
+                        ad2_printf_host(false,
+                                        "FTP requires a username (1-%u chars) and password (%u-%u chars). Not enabled.\r\n",
+                                        FTPD_MAX_USER_LEN, FTPD_MIN_PASSWORD_LEN, FTPD_MAX_PASSWORD_LEN);
+                    } else {
+                        ad2_set_config_key_bool(FTPD_CONFIG_SECTION, FTPD_SUBCMD_ENABLE, requested_enable);
+                        ad2_printf_host(false, "Success setting value. Restart required to take effect.\r\n");
+                    }
                 }
 
                 // show contents of this slot
@@ -1782,18 +1806,53 @@ static void _cli_cmd_ftpd_event(const char *string)
             case FTPD_SUBCMD_ACL_ID:
                 // If no arg then return ACL list
                 if (ad2_copy_nth_arg(arg, string, 2, true) >= 0) {
-                    ad2ftpd_acl.clear();
-                    int res = ad2ftpd_acl.add(arg);
+                    if (arg == "-") {
+                        arg = FTPD_DEFAULT_ACL;
+                    }
+                    ad2_acl_check candidate_acl;
+                    int res = candidate_acl.add(arg);
                     if (res == ad2ftpd_acl.ACL_FORMAT_OK) {
+                        ad2ftpd_acl.clear();
+                        ad2ftpd_acl.add(arg);
                         ad2_set_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_ACL, arg.c_str());
                     } else {
                         ad2_printf_host(false, "Error parsing ACL string. Check ACL format. Not saved.\r\n");
                     }
                 }
-                // show contents of this slot set default to allow all
-                acl = "0.0.0.0/0";
+                // Default to loopback so a missing ACL cannot expose FTP remotely.
+                acl = FTPD_DEFAULT_ACL;
                 ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_ACL, acl);
                 ad2_printf_host(false, "ftpd 'acl' set to '%s'.\r\n", acl.c_str());
+                break;
+            case FTPD_SUBCMD_USER_ID:
+                if (ad2_copy_nth_arg(arg, string, 2) >= 0) {
+                    if (arg.empty() || arg.length() > FTPD_MAX_USER_LEN) {
+                        ad2_printf_host(false, "FTP username must be 1-%u characters. Not saved.\r\n",
+                                        FTPD_MAX_USER_LEN);
+                    } else {
+                        ad2_set_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_USER, arg.c_str());
+                        ad2_printf_host(false, "FTP username saved. Restart required to take effect.\r\n");
+                    }
+                }
+                userid.clear();
+                ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_USER, userid);
+                ad2_printf_host(false, "FTP username is %s.\r\n",
+                                userid.empty() ? "not configured" : "configured");
+                break;
+            case FTPD_SUBCMD_PASSWORD_ID:
+                if (ad2_copy_nth_arg(arg, string, 2, true) >= 0) {
+                    if (arg.length() < FTPD_MIN_PASSWORD_LEN || arg.length() > FTPD_MAX_PASSWORD_LEN) {
+                        ad2_printf_host(false, "FTP password must be %u-%u characters. Not saved.\r\n",
+                                        FTPD_MIN_PASSWORD_LEN, FTPD_MAX_PASSWORD_LEN);
+                    } else {
+                        ad2_set_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_PASSWORD, arg.c_str());
+                        ad2_printf_host(false, "FTP password saved. Restart required to take effect.\r\n");
+                    }
+                }
+                password.clear();
+                ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_PASSWORD, password);
+                ad2_printf_host(false, "FTP password is %s.\r\n",
+                                password.empty() ? "not configured" : "configured");
                 break;
             default:
                 break;
@@ -1840,10 +1899,14 @@ static struct cli_command ftpd_cmd_list[] = {
         "Commands:\r\n"
         "    enable [Y|N]            Set or get enable flag\r\n"
         "    acl [aclString|-]       Set or get ACL CIDR CSV list\r\n"
-        "                            use - to delete\r\n"
+        "                            use - to reset to loopback only\r\n"
+        "    user [username]         Set username (1-32 characters)\r\n"
+        "    password [password]     Set password (8-64 characters)\r\n"
         "Examples:\r\n"
-        "    ```ftpd enable Y```\r\n"
+        "    ```ftpd user ad2iot```\r\n"
+        "    ```ftpd password use-a-unique-password```\r\n"
         "    ```ftpd acl 192.168.0.0/28,192.168.1.0-192.168.1.10,192.168.3.4```\r\n"
+        "    ```ftpd enable Y```\r\n"
         , _cli_cmd_ftpd_event
     }
 };
@@ -1875,19 +1938,32 @@ void ftpd_init()
 
     ad2_printf_host(true, "%s: Init starting", TAG);
 
-    // init the ftpd class.
+    std::string userid;
+    std::string password;
+    ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_USER, userid);
+    ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_PASSWORD, password);
+    if (!ftpd_credentials_valid(userid, password)) {
+        ad2_printf_host(true,
+                        "%s: Refusing to start: configure a username (1-%u chars) and password (%u-%u chars).",
+                        TAG, FTPD_MAX_USER_LEN, FTPD_MIN_PASSWORD_LEN, FTPD_MAX_PASSWORD_LEN);
+        return;
+    }
+
+    // Load and parse ACL. Missing settings permit loopback only; malformed ACLs
+    // prevent startup because an empty ACL object otherwise means allow all.
+    std::string acl = FTPD_DEFAULT_ACL;
+    ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_ACL, acl);
+    ad2ftpd_acl.clear();
+    int res = ad2ftpd_acl.add(acl);
+    if (res != ad2ftpd_acl.ACL_FORMAT_OK) {
+        ad2_printf_host(true, "%s: Refusing to start: ACL parse error %i.", TAG, res);
+        return;
+    }
+
+    // init the ftpd class only after the fail-closed startup checks pass.
     ad2ftpd = new FTPD();
     ad2ftpd->setCallbacks(new FTPDFileCallbacks());
-
-    // load and parse ACL if set or set default to allow all.
-    std::string acl = "0.0.0.0/0";
-    ad2_get_config_key_string(FTPD_CONFIG_SECTION, FTPD_SUBCMD_ACL, acl);
-    if (acl.length()) {
-        int res = ad2ftpd_acl.add(acl);
-        if (res != ad2ftpd_acl.ACL_FORMAT_OK) {
-            ESP_LOGW(TAG, "ACL parse error %i for '%s'", res, acl.c_str());
-        }
-    }
+    ad2ftpd->setCredentials(userid, password);
 
     ad2_printf_host(true, "%s: Init done.", TAG);
     xTaskCreate(&ftp_daemon_task, "ftp daemon", 1024*8, NULL, tskIDLE_PRIORITY+1, NULL);

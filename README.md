@@ -90,7 +90,7 @@ https://smartthings.developer.samsung.com/partner/enroll
 - Use the SmartThings/Samsung developer workspace to create custom profiles and onboarding as described in this howto guide [How to build Direct Connected devices with the SmartThings Platform](https://community.smartthings.com/t/how-to-build-direct-connected-devices/204055). Generate a serial number and keys and register them in the management portal and configure the device with the validated keys.
 
 ##  4. <a name='configuring-the-ad2iot-device'></a>Configuring the AD2IoT device
-Configuration of the AD2IoT is done directly over the USB serial port using a command line interface, or by editing the configuration file [ad2iot.ini](data/ad2iot.ini) on the internal spiffs partition using ftp over a local network or by placing a config file named [ad2iot.ini](data/ad2iot.ini) on an attached uSD card with a fat32 partition.
+Configuration of the AD2IoT is done directly over the USB serial port using a command line interface, or by editing the configuration file [ad2iot.ini](data/ad2iot.ini) on the internal SPIFFS partition. An SD-card `ad2iot.ini` takes precedence over SPIFFS. The optional authenticated FTP service can manage both files from a trusted management network, but FTP sends credentials and file contents in cleartext.
 
 - Configuration using the command line interface.
   - Connect the AD2IoT ESP32 USB to a host computer use a USB A to USB Micro B cable and run a terminal program such as [Putty](https://www.putty.org/) or [Tiny Serial](http://brokestream.com/tinyserial.html) to connect to the USB com port using 115200 baud. Most Linux distributions already have the CH340 USB serial port driver installed.
@@ -98,9 +98,9 @@ Configuration of the AD2IoT is done directly over the USB serial port using a co
   - To save settings to the [ad2iot.ini](data/ad2iot.ini) use the ```restart``` command. This will save any settings changed in memory to the active configuration file before restarting to load the new settings.
 - Configuration using the configuration file.
   - The ad2iot will first attempt to load the [ad2iot.ini](data/ad2iot.ini) config file from the first fat32 partition on a uSD card if attached. If this fails it will attempt to load the same file from the internal spiffs partition. If this fails the system will use defaults and save any changes on ```restart``` command to the internal spiffs partition in the file [ad2iot.ini](data/ad2iot.ini).
-  - To access /sdcard/ad2iot.ini and /spiffs/ad2iot.ini files over the network enable the [FTPD component](#ftp-daemon-component). With FileZilla edit the configuration upload and send a custom FTP command using the "Server" menu and the "Enter custom command.." sub menu. Enter ```REST``` to restart the ad2iot and force it to load the configuration.
-  - Sample config file with internal documentation can be found here [data/ad2iot.ini](data/ad2iot.ini)
-  - Be sure to set the ftpd acl to only allow trusted systems to manage the files on the uSD card.
+  - To access `/sdcard/ad2iot.ini` and `/spiffs/ad2iot.ini` over the network, configure unique FTP credentials and a narrow ACL before enabling the [FTPD component](#ftp-daemon-component). With FileZilla, upload the edited configuration and send the custom command `REST` to restart and reload it.
+  - A sample configuration with embedded documentation is available at [data/ad2iot.ini](data/ad2iot.ini).
+  - Keep FTP disabled unless needed and restrict its ACL to specific trusted management systems. Do not expose it to the internet.
 
 ###  4.1. <a name='network-cli-access'></a>Network CLI access
 
@@ -141,9 +141,11 @@ Network CLI diagnostics have important limits: the TCP session depends on the sa
     - Enable and configure the WiFi or Ethernet networking driver.
       - Set ```'netmode'``` to ```W``` or ```E``` to enable the Wifi or Ethernet drivers and the ```<args>``` to configure the networking options such as IP address GW or DHCP and for Wifi the AP and password.
       - ```netmode E mode=d```
-    - Enable ftp daemon and configure the ACL.
-      - ```ftpd enable Y```
+    - Configure FTP credentials and a narrow ACL, then enable the daemon if it is needed.
+      - ```ftpd user ad2iot```
+      - ```ftpd password use-a-long-unique-password```
       - ```ftpd acl 192.168.1.0/24```
+      - ```ftpd enable Y```
     - Enable webui daemon and configure the ACL.
       - ```webui enable Y```
       - ```webui acl 192.168.1.0/24```
@@ -197,8 +199,10 @@ Usage: restart
 ```
 - factory-reset
 ```console
-Usage: factory-reset
-    Erase config storage and reboot to factory defaults
+Usage: factory-reset [ERASE-SD]
+    Erase internal config storage and reboot to safe factory defaults.
+    Refuses to continue if /sdcard/ad2iot.ini would override the reset.
+    ERASE-SD explicitly removes that SD configuration before reset.
 ```
 - top
 ```console
@@ -851,9 +855,9 @@ Options:
   switch 1 trouble = ON
   ```
 ###  5.8. <a name='ftp-daemon-component'></a>FTP daemon component
-The File Transfer Protocol (FTP) is a standard communication protocol used for the transfer of computer files from a server to a client on a computer network. FTP is built on a client–server model architecture using separate control and data connections between the client and the server. FTP users may authenticate themselves with a clear-text sign-in protocol, normally in the form of a username and password, but can connect anonymously if the server is configured to allow it.
+The File Transfer Protocol (FTP) is a standard file-transfer protocol using separate control and data connections. This implementation requires a configured username and password, but FTP provides no transport encryption: credentials, configuration, logs, certificates, and firmware are transferred in cleartext.
 
-If enabled the daemon will allow update of files on the attached uSD card. This allows for update of HTML or configuration settings from a secure host on the local network. To secure the FTP daemon the ACL needs to be configured to allow limited access to this service.
+The daemon is disabled by default and refuses to start without valid credentials and a valid ACL. Use it only on a trusted management network, restrict the ACL to the smallest practical set of client addresses, and disable it after file maintenance. Authentication does not make unsigned firmware trustworthy; only install firmware obtained from a trusted release source.
 
 This daemon only supports one command and control connection at a time. Be sure to disable or limit the client used to a single connection or the client may appear to stall or timeout.
 
@@ -876,19 +880,27 @@ Usage: ftpd <command> [arg]
 Commands:
     enable [Y|N]            Set or get enable flag
     acl [aclString|-]       Set or get ACL CIDR CSV list
-                            use - to delete
+                            use - to reset to loopback only
+    user [username]         Set username (1-32 characters)
+    password [password]     Set password (8-64 characters)
 Examples:
-    ```ftpd enable Y```
+    ```ftpd user ad2iot```
+    ```ftpd password use-a-long-unique-password```
     ```ftpd acl 192.168.0.0/28,192.168.1.0-192.168.1.10,192.168.3.4```
+    ```ftpd enable Y```
 ```
 ```console
 # Example config file ini section
 [ftpd]
-## Enable / Disable true or false
-enable = true
+## Disabled until unique credentials and a narrow ACL are configured
+enable = false
 
 ## Access control list
-acl = 192.168.0.0/16, 10.10.0.0/16
+acl = 192.168.1.100
+
+## FTP is cleartext. Use only on a trusted management network.
+user = ad2iot
+password = replace-with-a-long-unique-password
 ```
 ##  6. <a name='building-firmware'></a>Building firmware
 The firmware version is sourced from `version.txt`. Bump that value for every complete firmware build intended for distribution; ESP-IDF embeds it in the application metadata used by the CLI, update services, integrations, and Web UI.

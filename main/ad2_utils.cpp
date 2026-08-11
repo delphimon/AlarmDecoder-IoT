@@ -841,7 +841,7 @@ bool ad2_replace_all(std::string &inStr, const char *findStr, const char *replac
 void ad2_ltrim(std::string &s)
 {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(),
-                                    std::not1(std::ptr_fun<int, int>(std::isspace))));
+                                    [](unsigned char ch) { return !std::isspace(ch); }));
 }
 
 /**
@@ -852,7 +852,7 @@ void ad2_ltrim(std::string &s)
 void ad2_rtrim(std::string &s)
 {
     s.erase(std::find_if(s.rbegin(), s.rend(),
-                         std::not1(std::ptr_fun<int, int>(std::isspace)))
+                         [](unsigned char ch) { return !std::isspace(ch); })
             .base(),
             s.end());
 }
