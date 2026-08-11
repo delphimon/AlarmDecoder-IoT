@@ -1,62 +1,83 @@
-name: CI build
+name: Firmware build
 
-on: [push, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      artifact_name:
+        description: Name of the uploaded firmware artifact
+        value: ${{ jobs.build.outputs.artifact_name }}
+      firmware_version:
+        description: Firmware version read from version.txt
+        value: ${{ jobs.build.outputs.firmware_version }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  PP: AD2IoT-Release
-  SHELL: /bin/bash
-  TERM: 'xterm-256color'
+  PLATFORMIO_CORE_VERSION: 6.1.19
+  PYTHON_VERSION: '3.13'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      firmware_version: ${{ steps.package.outputs.firmware_version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@v6.0.2
         with:
-            submodules: recursive
+          submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Create base Artifact release package structure
-        run: |
-          mkdir $PP
-          cp README.md CHANGELOG.md LICENSE $PP/
-          mkdir $PP/esp32
-          cp contrib/README-FLASH-ESP32.md contrib/ESP32-DOWNLOAD-TOOL-UPLOADING-FIRMWARE.png $PP/esp32/
-
-      - name: Install required packages for st-device-c-ref build
-        run: |
-          sudo apt-get install -y  gperf cmake ninja-build ccache dfu-util
-
-      - name: Install PlatformIO Core
-        run: pip install --upgrade platformio
-
-      - name: Build esp32-poe-iso
-        run: pio run -e esp32-poe-iso
-
-      - name: Build spiffs.bin for esp32-poe-iso
-        run: pio run -t buildfs -e esp32-poe-iso
-
-      - name: Create release package folders for each branch.
-        run: |
-          mkdir $PP/esp32/esp32-poe-iso-webui
-
-      - name: Add esp32-poe-iso webui firmware build to release package
-        run: |
-          cp .pio/build/esp32-poe-iso/firmware.bin $PP/esp32/esp32-poe-iso-webui/
-
-      - name: Add common firmware files for each branch to the package.
-        run: |
-          cp .pio/build/esp32-poe-iso/spiffs.bin $PP/esp32/esp32-poe-iso-webui/
-          cp .pio/build/esp32-poe-iso/bootloader.bin $PP/esp32/esp32-poe-iso-webui/
-          cp .pio/build/esp32-poe-iso/partitions.bin $PP/esp32/esp32-poe-iso-webui/
-          cp .pio/build/esp32-poe-iso/ota_data_initial.bin $PP/esp32/esp32-poe-iso-webui/
-
-      - name: Upload firmware package Artifact
-        uses: actions/upload-artifact@v4
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v5.0.5
         with:
-          name: AD2IoT-Release-Package
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ env.PLATFORMIO_CORE_VERSION }}-${{ hashFiles('platformio.ini', '.gitmodules') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-${{ env.PLATFORMIO_CORE_VERSION }}-
+
+      - name: Install pinned PlatformIO Core
+        run: python -m pip install --disable-pip-version-check "platformio==${PLATFORMIO_CORE_VERSION}"
+
+      - name: Validate repository inputs
+        run: |
+          python tools/ci/validate_project.py
+          node --check contrib/webUI/flash-drive/www/app.js
+
+      - name: Show tool versions
+        run: |
+          python --version
+          pio --version
+          node --version
+
+      - name: Build esp32-poe-iso firmware and SPIFFS image
+        run: |
+          pio run -e esp32-poe-iso
+          pio run -e esp32-poe-iso -t buildfs
+
+      - name: Package and checksum release files
+        id: package
+        run: python tools/ci/package_release.py --build-dir .pio/build/esp32-poe-iso --output-dir AD2IoT-Release
+
+      - name: Upload firmware package
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
           path: AD2IoT-Release
+          if-no-files-found: error
+          retention-days: 14

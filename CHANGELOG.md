@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
-- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1110`; `version.txt` is now the single runtime version source.
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1111`; `version.txt` remains the single runtime version source.
+- [x] CI/RELEASE: add pull-request validation, pin PlatformIO/Python/action versions, cache PlatformIO packages, apply least-privilege permissions and timeouts, and consolidate release publishing onto the reusable firmware-build workflow.
+- [x] CI/RELEASE: validate version/changelog/web inputs, syntax-check browser JavaScript, package the SD-card web/certificate bundle, fail on missing binaries, and generate `SHA256SUMS` plus versioned artifact/archive names.
+- [x] DOCS: refresh `PROJECT_REVIEW.md` against `AD2IOT-1111`, reconcile the current feature inventory, and explicitly rank the security, reliability, and toolchain backlog. SmartThings is deferred and excluded from this review cycle.
 - [x] WEBUI: serialize HTTPS REST operations alongside the persistent WSS connection so the two-session TLS budget no longer resets configuration, log, firmware, or system requests.
 - [x] CORE: expose the bounded diagnostic history through serial and network CLI, and add opt-in asynchronous, rotating uSD log persistence with drop/write-error status.
 - [x] WEBUI/USDUPDATE: reduce HTTPS client memory pressure and expose TLS/reset/heap diagnostics; validate and report SD firmware, add guarded upgrade/restart controls, exact activity times, and readable zone cards.
@@ -14,8 +17,19 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - [x] WEBUI: add a responsive live dashboard, full keypad, reboot-scoped activity history, read-only state/history API, protocol validation, and safer static-file handling.
 - [x] USDUPDATE: validate image size and OTA results, retain failed images for diagnosis, and only select/restart into a successfully validated application image.
 - [x] CORE: Add an opt-in, password-protected and ACL-restricted TCP transport for the CLI.
-- [ ] CORE: TODO: Add astyle testing in new github action worflow.
-- [ ] STSDK: TODO: Successful adopting test.
+
+### High-priority backlog
+- [ ] SECURITY: require authentication and authorization for web alarm controls and diagnostic/configuration APIs; do not rely on an allow-all IP ACL.
+- [ ] SECURITY: disable unauthenticated FTP by default, require credentials, and prevent FTP-triggered installation of unsigned firmware.
+- [ ] SECURITY: enable outbound TLS peer verification and add signed firmware, downgrade policy, and boot rollback before treating remote or SD updates as trusted.
+- [ ] RELIABILITY: bound Wi-Fi SSID/password copies, make factory reset handle the higher-priority SD configuration safely, and centralize restart cleanup.
+- [ ] TEST: add host-side parser/configuration/security tests and hardware-in-loop smoke coverage; CI currently proves compilation and package integrity only.
+- [ ] TOOLCHAIN: migrate from PlatformIO Espressif32 6.4/ESP-IDF 5.1.1 to 6.13/ESP-IDF 5.5.3 in a dedicated compatibility change, then evaluate Espressif32 7/ESP-IDF 6 separately.
+- [ ] TOOLCHAIN: compatibility-test updates from SimpleIni 4.19 to 4.26 and `{fmt}` 8.0.1 to 12.2.0.
+- [ ] STYLE: add a non-mutating format/style check after agreeing on a repository-wide baseline; the existing tree is not yet style-clean.
+
+### Deferred
+- SmartThings adoption and SDK work are intentionally out of scope for the current release cycle.
 
 ### SM - Sean Mathews coder at f34r.com
 - [ ] API: Add countdown tracking for DSC/Ademco exit mode

@@ -2,3 +2,6 @@
 build
 .vscode
 sdkconfig
+AD2IoT-Release/
+__pycache__/
+*.py[cod]
