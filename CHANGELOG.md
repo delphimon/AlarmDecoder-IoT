@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1118` for the hardware-validated SD update policy build.
+- [x] SECURITY/USDUPDATE: require a strictly newer `AD2IOT-<number>` release after full image integrity checks; reject malformed identities, same-version reinstalls, and downgrades while reporting the policy state through CLI and Web UI diagnostics.
+- [x] BUILD: make CMake reconfigure when `version.txt` changes so incremental PlatformIO builds cannot retain a stale ESP application identity.
+- [x] TEST: add regression checks for SD version-policy ordering, Web UI blocked-image behavior, and the incremental-build version dependency.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1117` after the repeatable two-session hardware smoke test exposed a 3,548-byte heap low-water mark during WSS history generation.
 - [x] PERFORMANCE/WEBUI: send the cJSON history print buffer directly as a WebSocket text frame instead of duplicating it in a `std::string` while the history tree and second TLS session are still allocated.
 - [x] TEST/HARDWARE: add a dependency-free, read-only HTTPS/WSS smoke tool that loads local INI credentials without printing them, verifies certificate trust/authentication/redaction/version/uptime, and measures the browser-equivalent two-session workload; verify AD2IOT-1117 improves minimum heap from 3,548 to 23,608 bytes with zero request errors or reboots.
@@ -46,8 +50,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### High-priority backlog
 - [x] SECURITY: require authentication and authorization for web alarm controls and diagnostic/configuration APIs; the service now fails closed instead of relying on an allow-all IP ACL.
 - [x] SECURITY: disable unauthenticated FTP by default and require credentials plus a valid ACL before startup.
-- [ ] SECURITY: independently authorize firmware installation and prevent installation of unsigned, wrong-board, or disallowed-downgrade firmware, including through FTP.
-- [ ] SECURITY: enable outbound TLS peer verification and add signed firmware, downgrade policy, and boot rollback before treating remote or SD updates as trusted.
+- [ ] SECURITY: independently authorize firmware installation and prevent installation of unsigned firmware, including through FTP. Wrong-project/chip images and disallowed downgrades are now rejected.
+- [ ] SECURITY: enable outbound TLS peer verification and add signed firmware plus boot rollback before treating remote or SD updates as trusted. A strict numeric release policy is now enforced.
 - [x] RELIABILITY: bound Wi-Fi SSID/password copies and make factory reset handle the higher-priority SD configuration safely.
 - [ ] RELIABILITY: centralize restart cleanup across network, storage, and integration services.
 - [ ] TEST: add functional parser and redaction tests plus hardware-in-loop authorization, HTTPS/WSS, update, and restart smoke coverage. Static path/action/session regression checks are now present.

@@ -195,6 +195,12 @@
       status = "SD card not mounted";
     } else if (!firmware.present) {
       status = "No firmware.bin";
+    } else if (firmware.same_version) {
+      status = "Current version already installed";
+      detail = "Same-version reinstalls are blocked. Build a new release or use USB recovery.";
+    } else if (firmware.downgrade) {
+      status = "Downgrade blocked";
+      detail = "The SD image is older than the installed firmware and cannot be installed.";
     } else if (!firmware.valid) {
       status = "Invalid image";
     } else if (firmware.update_in_progress) {
@@ -204,8 +210,8 @@
       status = "Upgrade available";
       detail = "The image passed its ESP32 target, project, checksum, and SHA-256 checks.";
     } else {
-      status = "Valid image · same version";
-      detail = "This image can be reinstalled, but its version matches the running firmware.";
+      status = "No upgrade available";
+      detail = "The SD image is not eligible for installation.";
     }
     byId("sdFirmwareStatus").textContent = status;
     byId("sdFirmwareVersion").textContent = firmware.version || "—";

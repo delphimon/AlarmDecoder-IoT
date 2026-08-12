@@ -35,6 +35,12 @@ class SecurityDefaultsTests(unittest.TestCase):
         cls.webui_source = (ROOT / "components" / "webUI" / "webUI.cpp").read_text(
             encoding="utf-8"
         )
+        cls.usdupdate_source = (
+            ROOT / "components" / "usdupdate" / "usdupdate.cpp"
+        ).read_text(encoding="utf-8")
+        cls.webui_app = (
+            ROOT / "contrib" / "webUI" / "flash-drive" / "www" / "app.js"
+        ).read_text(encoding="utf-8")
 
     def test_ftp_is_disabled_and_has_no_shipped_credentials(self) -> None:
         self.assertEqual(self.ftpd.get("enable", "").casefold(), "false")
@@ -164,10 +170,44 @@ class SecurityDefaultsTests(unittest.TestCase):
         self.assertNotIn("std::string config", streamer)
 
     def test_browser_rest_requests_send_same_origin_credentials(self) -> None:
-        app = (ROOT / "contrib" / "webUI" / "flash-drive" / "www" / "app.js").read_text(
-            encoding="utf-8"
-        )
-        self.assertGreaterEqual(app.count('credentials: "same-origin"'), 5)
+        self.assertGreaterEqual(self.webui_app.count('credentials: "same-origin"'), 5)
+
+    def test_sd_update_requires_a_strictly_newer_release_identity(self) -> None:
+        parser_start = self.usdupdate_source.index("static bool usd_parse_release_number")
+        validation_start = self.usdupdate_source.index("bool usd_get_firmware_status")
+        parser_and_policy = self.usdupdate_source[parser_start:validation_start]
+        self.assertIn('static const char prefix[] = "AD2IOT-"', parser_and_policy)
+        self.assertIn("(UINT32_MAX - digit) / 10", parser_and_policy)
+        self.assertIn("candidate_release == installed_release", parser_and_policy)
+        self.assertIn("status->same_version = true", parser_and_policy)
+        self.assertIn("candidate_release < installed_release", parser_and_policy)
+        self.assertIn("status->downgrade = true", parser_and_policy)
+        self.assertIn("status->newer_version = true", parser_and_policy)
+
+    def test_sd_update_applies_version_policy_after_integrity_validation(self) -> None:
+        validation_start = self.usdupdate_source.index("bool usd_get_firmware_status")
+        validation_end = self.usdupdate_source.index("static void usd_task_func", validation_start)
+        validation = self.usdupdate_source[validation_start:validation_end]
+        integrity = validation.index("status->integrity_valid = true")
+        policy = validation.index("usd_apply_version_policy")
+        valid = validation.index("status->valid = true")
+        self.assertLess(integrity, policy)
+        self.assertLess(policy, valid)
+
+    def test_webui_exposes_and_disables_blocked_sd_images(self) -> None:
+        self.assertIn('status = "Current version already installed"', self.webui_app)
+        self.assertIn('status = "Downgrade blocked"', self.webui_app)
+        self.assertIn("install.disabled = !firmware.valid", self.webui_app)
+        firmware_start = self.webui_source.index("static esp_err_t webui_firmware_handler")
+        firmware_handler = self.webui_source[firmware_start:firmware_start + 2600]
+        self.assertIn('"same_version", status.same_version', firmware_handler)
+        self.assertIn('"downgrade", status.downgrade', firmware_handler)
+        self.assertIn("status.valid && status.newer_version", firmware_handler)
+
+    def test_version_file_change_forces_cmake_reconfiguration(self) -> None:
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn("CMAKE_CONFIGURE_DEPENDS", cmake)
+        self.assertIn("${CMAKE_CURRENT_LIST_DIR}/version.txt", cmake)
 
     def test_webui_static_path_rejects_traversal(self) -> None:
         start = self.webui_source.index("esp_err_t file_get_handler")

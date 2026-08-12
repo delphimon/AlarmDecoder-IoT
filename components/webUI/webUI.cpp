@@ -971,6 +971,11 @@ static esp_err_t webui_firmware_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "sd_mounted", status.sd_mounted);
     cJSON_AddBoolToObject(root, "present", status.present);
     cJSON_AddBoolToObject(root, "valid", status.valid);
+    cJSON_AddBoolToObject(root, "integrity_valid", status.integrity_valid);
+    cJSON_AddBoolToObject(root, "version_policy_valid", status.version_policy_valid);
+    cJSON_AddBoolToObject(root, "newer_version", status.newer_version);
+    cJSON_AddBoolToObject(root, "same_version", status.same_version);
+    cJSON_AddBoolToObject(root, "downgrade", status.downgrade);
     cJSON_AddBoolToObject(root, "update_in_progress", status.update_in_progress);
     cJSON_AddNumberToObject(root, "size_bytes", (double)status.size_bytes);
     cJSON_AddStringToObject(root, "version", status.version);
@@ -978,8 +983,7 @@ static esp_err_t webui_firmware_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "build_date", status.build_date);
     cJSON_AddStringToObject(root, "build_time", status.build_time);
     cJSON_AddStringToObject(root, "error", status.error);
-    cJSON_AddBoolToObject(root, "upgrade_available",
-                          status.valid && strcmp(status.version, ad2_firmware_version()) != 0);
+    cJSON_AddBoolToObject(root, "upgrade_available", status.valid && status.newer_version);
 #else
     cJSON_AddBoolToObject(root, "supported", false);
     cJSON_AddStringToObject(root, "error", "SD firmware updates are disabled in this build");

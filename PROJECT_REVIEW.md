@@ -2,7 +2,7 @@
 
 Review date: 2026-08-11
 
-Reviewed baseline: `AD2IOT-1117`, including authenticated Web/API access, bounded TLS diagnostics, expanded security regressions, and repeatable hardware validation
+Reviewed baseline: `AD2IOT-1118`, including authenticated Web/API access, bounded TLS diagnostics, strict SD update version policy, expanded security regressions, and repeatable hardware validation
 
 Primary shipped target: `esp32-poe-iso` Web UI firmware
 
@@ -10,26 +10,26 @@ Deferred scope: SmartThings integration
 
 ## Executive Summary
 
-AlarmDecoder-IoT is a capable ESP32 alarm-panel appliance with Ethernet/Wi-Fi, an AlarmDecoder parser, MQTT/Home Assistant support, browser controls, optional HTTPS/WSS, serial-over-TCP, serial and authenticated network CLIs, notification providers, SD/SPIFFS configuration, and SD firmware update support. The recent `AD2IOT-1108` through `AD2IOT-1117` work materially improved operator visibility and reliability: exact activity timestamps, readable zone cards, firmware inspection/update and restart controls, a Settings pane, bounded diagnostic history, network-CLI log access, optional rotating SD logs, TLS resource diagnostics, authenticated Web/API access, bounded configuration streaming, and lower-copy WSS history delivery are now present.
+AlarmDecoder-IoT is a capable ESP32 alarm-panel appliance with Ethernet/Wi-Fi, an AlarmDecoder parser, MQTT/Home Assistant support, browser controls, optional HTTPS/WSS, serial-over-TCP, serial and authenticated network CLIs, notification providers, SD/SPIFFS configuration, and SD firmware update support. The recent `AD2IOT-1108` through `AD2IOT-1118` work materially improved operator visibility and reliability: exact activity timestamps, readable zone cards, firmware inspection/update and restart controls, a Settings pane, bounded diagnostic history, network-CLI log access, optional rotating SD logs, TLS resource diagnostics, authenticated Web/API access, bounded configuration streaming, lower-copy WSS history delivery, and strict SD release ordering are now present.
 
-The Web UI's former P0 exposure is addressed in `AD2IOT-1113` through `AD2IOT-1117`: the service is disabled by default, ships without credentials, refuses invalid startup configuration, and authenticates static files, diagnostic APIs, maintenance actions, and WebSocket commands. HTTP Basic credentials establish a random reboot-scoped browser session, and browser command paths enforce same-origin and custom-header controls. Large configuration views are redacted and streamed in bounded chunks so they fit beside the persistent WSS session on the constrained ESP32. FTP is also disabled by default and fails closed on invalid credentials or access controls. The device still should not be internet-exposed: Basic authentication over plain HTTP is observable, outbound TLS peer verification remains globally disabled, and firmware is not signed and has no rollback or downgrade policy.
+The Web UI's former P0 exposure is addressed in `AD2IOT-1113` through `AD2IOT-1118`: the service is disabled by default, ships without credentials, refuses invalid startup configuration, and authenticates static files, diagnostic APIs, maintenance actions, and WebSocket commands. HTTP Basic credentials establish a random reboot-scoped browser session, and browser command paths enforce same-origin and custom-header controls. Large configuration views are redacted and streamed in bounded chunks so they fit beside the persistent WSS session on the constrained ESP32. FTP is also disabled by default and fails closed on invalid credentials or access controls. The device still should not be internet-exposed: Basic authentication over plain HTTP is observable, outbound TLS peer verification remains globally disabled, and firmware is not signed or protected by boot rollback. SD updates now require a structurally valid, strictly newer numeric release, but this is an accidental-installation control rather than publisher authentication.
 
-The dependency-free host regression suite has grown from six to thirty checks covering externally reachable service defaults, Web UI authorization guard placement, WSS session state/history allocation, origin/action guards, persistent cookie storage, browser credential behavior, bounded configuration streaming, traversal rejection, hardware-smoke helpers, firmware size/identity enforcement, and release-package checksums. CI validates those tests and repository inputs, compiles the primary board on pushes and pull requests, enforces RAM/flash budgets and embedded version identity, builds SPIFFS, creates checksummed/versioned packages, and reuses the same build for releases. The new read-only hardware smoke tool covers verified HTTPS/WSS authentication, REST/configuration stability, secret redaction, version/uptime, heap retention, and the browser-equivalent two-session workload. Panel actions, failure injection, certificate renewal, Wi-Fi failover, rollback, and sustained hardware testing remain incomplete.
+The dependency-free host regression suite has grown from six to thirty-four checks covering externally reachable service defaults, Web UI authorization guard placement, WSS session state/history allocation, origin/action guards, persistent cookie storage, browser credential behavior, bounded configuration streaming, traversal rejection, SD update policy, hardware-smoke helpers, firmware size/identity enforcement, and release-package checksums. CI validates those tests and repository inputs, compiles the primary board on pushes and pull requests, enforces RAM/flash budgets and embedded version identity, builds SPIFFS, creates checksummed/versioned packages, and reuses the same build for releases. The read-only hardware smoke tool covers verified HTTPS/WSS authentication, REST/configuration stability, secret redaction, version/uptime, heap retention, and the browser-equivalent two-session workload. Panel actions, failure injection, certificate renewal, Wi-Fi failover, rollback, and sustained hardware testing remain incomplete.
 
 ## Verification Performed
 
 - Reviewed source, default and generated SDK configuration, partition layout, Web UI assets and API description, CLI/network CLI, FTP, SD update, logging, HTTPS/WSS resource handling, documentation, and both GitHub workflows.
-- Confirmed `version.txt` is the firmware identity source and advanced it for every complete hardware candidate through `AD2IOT-1117`.
+- Confirmed `version.txt` is the firmware identity source and advanced it for every complete hardware candidate through `AD2IOT-1118`; CMake now observes the file so incremental builds cannot retain the prior identity.
 - Ran dependency-free repository and host regression tests, browser JavaScript syntax checking, Python compile checking, whitespace checking, the full `esp32-poe-iso` firmware and SPIFFS builds, and release-package verification. Exact final results are listed in **Validation Results**.
-- Installed `AD2IOT-1115` through `AD2IOT-1117` through the validated SD updater on the Ethernet device. Exercised a public Let's Encrypt HTTPS certificate, Basic/cookie authentication, clean unauthenticated rejection, WSS sync/ping/history, the Settings APIs, network-CLI logs, and repeated REST/configuration traffic. No alarm-panel control or emergency action was sent. Wi-Fi failover, certificate renewal, SD failure injection, abrupt-power recovery, and rollback were not exercised.
+- Installed `AD2IOT-1115` through `AD2IOT-1118` through the validated SD updater on the Ethernet device. Exercised a public Let's Encrypt HTTPS certificate, Basic/cookie authentication, clean unauthenticated rejection, WSS sync/ping/history, the Settings APIs, network-CLI logs, repeated REST/configuration traffic, and same-version/downgrade update rejection. No alarm-panel control or emergency action was sent. Wi-Fi failover, certificate renewal, SD failure injection, abrupt-power recovery, and rollback were not exercised.
 
 ## Highest-Priority TODOs
 
 | Priority | Item | Why it is urgent | Recommended completion condition |
 |---|---|---|---|
-| P1 | Authenticate firmware installation independently | FTP now requires credentials and a valid ACL, but authenticated FTP can still stage and trigger an unsigned firmware image. | Device-enforced signing, board/channel/downgrade policy, and separate update authorization. |
+| P1 | Authenticate firmware installation independently | FTP now requires credentials and a valid ACL, but authenticated FTP can still stage and trigger an unsigned firmware image. | Device-enforced signing, release-channel policy, and separate update authorization; chip/project/version/downgrade checks are already enforced. |
 | P1 | Require outbound TLS peer verification | `CONFIG_ESP_TLS_INSECURE` and `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY` weaken MQTT and notification HTTPS clients. | Trust bundle/time handling verified on device; insecure options disabled; failure-path tests added. |
-| P1 | Sign firmware and enable recovery policy | SD images are structurally validated but not authenticated; rollback is disabled. | Signed images, board/channel/downgrade policy, rollback enabled, failed-boot recovery tested. |
+| P1 | Enable boot recovery policy | SD images are structurally validated and constrained to newer releases, but rollback is disabled. | Rollback enabled, application-valid marking defined, and failed-boot recovery tested. |
 | P1 | Establish automated behavior coverage | Security-sensitive parsers and controls currently depend on manual testing. | Host tests for protocol/config/redaction/path/action validation plus a small hardware smoke suite. |
 
 These items are synchronized with the high-priority backlog at the top of `CHANGELOG.md`. SmartThings work is intentionally deferred.
@@ -41,11 +41,11 @@ These items are synchronized with the high-priority backlog at the top of `CHANG
 - The shipped configuration and factory-reset configuration now disable FTP.
 - Startup requires a username, an 8-64 character password, and a syntactically valid ACL; missing ACLs default to loopback and malformed ACL updates no longer erase the active restriction.
 - FTP still uses cleartext credentials and file transfer, so it belongs only on a trusted management network.
-- Authenticated FTP supports file upload plus custom restart/update commands. The SD updater verifies ESP image structure and OTA operations, but not publisher authenticity, expected digest, board policy, or downgrade policy.
+- Authenticated FTP supports file upload plus custom restart/update commands. The SD updater verifies ESP image structure, chip/project identity, OTA operations, and strictly increasing numeric releases, but not publisher authenticity or an independently approved digest/channel manifest.
 
 The former anonymous installation path is closed, but a compromised credential or management host can still stage and execute arbitrary ESP firmware. Device-enforced signing remains required.
 
-### Resolved through AD2IOT-1117 — Web control and diagnostic authentication
+### Resolved through AD2IOT-1118 — Web control and diagnostic authentication
 
 - The sample Web UI is disabled and ships without a username or password. Missing ACLs default to loopback, and the server refuses to start with missing/invalid credentials or a malformed ACL.
 - A valid HTTP Basic login establishes a random 128-bit, reboot-scoped cookie with `HttpOnly`, `SameSite=Strict`, and `Secure` under HTTPS. Every static file and REST API requires either that cookie or valid Basic credentials.
@@ -64,7 +64,7 @@ Important limits remain. This is a single appliance-wide operator account with n
 
 The Settings “active” view now deliberately represents the persisted boot source. Unsaved CLI changes are not visible there until `restart` persists them. On hardware, nine full configuration reads plus 25 smaller API calls completed with zero errors and no panic/OOM/watchdog log entries.
 
-The repeatable two-session smoke test subsequently exposed a 3,548-byte heap low-water mark on `AD2IOT-1116`: WSS history held the cJSON tree, printed JSON, and a duplicate `std::string` while the REST TLS session remained live. `AD2IOT-1117` sends the printed buffer directly. The identical test then passed with a 23,608-byte minimum, no retained heap loss, and no reboot.
+The repeatable two-session smoke test subsequently exposed a 3,548-byte heap low-water mark on `AD2IOT-1116`: WSS history held the cJSON tree, printed JSON, and a duplicate `std::string` while the REST TLS session remained live. `AD2IOT-1117` sends the printed buffer directly. The identical test then passed with a 23,608-byte minimum, no retained heap loss, and no reboot; `AD2IOT-1118` retained that stability with a 21,828-byte minimum during its final hardware run.
 
 ### P1 — Outbound TLS clients do not verify peers
 
@@ -72,10 +72,10 @@ The repeatable two-session smoke test subsequently exposed a 3,548-byte heap low
 
 ### P1 — Firmware update recovery is incomplete
 
-The SD update path now reports installed and card-image versions, validates size and ESP image metadata, checks all OTA writes/finalization, keeps failed images, and exposes guarded Web UI upgrade/restart actions. However:
+The SD update path now reports installed and card-image versions, validates size and ESP image metadata, checks all OTA writes/finalization, keeps failed images, rejects malformed/same/older releases, and exposes guarded Web UI upgrade/restart actions. Hardware tests confirmed both CLI and HTTPS report a valid older image as `downgrade=true, valid=false` and the running image as `same_version=true, valid=false`. However:
 
 - there is no release signature or approved digest;
-- there is no board, release-channel, or downgrade policy;
+- chip ID, project identity, and numeric upgrade direction are checked, but there is no independently authenticated board/release-channel manifest;
 - `CONFIG_APP_ROLLBACK_ENABLE` is disabled in `sdkconfig.esp32-poe-iso:1703`;
 - secure boot and flash encryption are disabled.
 
@@ -101,7 +101,7 @@ Optional SD logging survives reboot and is asynchronous/rotating, but adds card 
 
 ### P2 — Test and warning debt remains
 
-- `tools/ci/tests` now has thirty checks covering shipped service defaults, Web UI authorization structure, browser/session/action/path protections, WSS history allocation, bounded configuration streaming, hardware-smoke helpers, firmware size/identity enforcement, and release-package contents/checksums. Functional parser/redaction unit tests, broader live negative authorization tests, update failure paths, and automated hardware scheduling remain.
+- `tools/ci/tests` now has thirty-four checks covering shipped service defaults, Web UI authorization structure, browser/session/action/path protections, WSS history allocation, bounded configuration streaming, SD update policy/order/UI behavior, incremental version dependencies, hardware-smoke helpers, firmware size/identity enforcement, and release-package contents/checksums. Functional parser/redaction unit tests, broader live negative authorization tests, update failure paths, and automated hardware scheduling remain.
 - Excluding vendored `{fmt}` and deferred SmartThings code, active source contains 74 `TODO`/`FIXME`/`WIP` markers and five `#if 0` blocks.
 - Project-owned GPIO-mask shifts now use 64-bit operands and deprecated C++ trimming adapters were replaced. Vendored SimpleIni qualifier warnings and other project warning debt remain.
 - CI builds only `esp32-poe-iso`; `esp32dev` is declared but unverified in CI.
@@ -181,7 +181,7 @@ Do not combine the framework, SimpleIni, and `{fmt}` major upgrades in one chang
 
 ## Recommended Execution Order
 
-1. Add device-enforced firmware signing, independent update authorization, downgrade policy, and rollback.
+1. Add device-enforced firmware signing, independent update authorization, a signed release-channel manifest, and boot rollback.
 2. Add functional parser/redaction tests and hardware negative tests for the new HTTP/WSS authorization boundary.
 3. Enable outbound certificate verification with trust/time failure-path tests.
 4. Centralize restart cleanup and exercise update/restart recovery on hardware.
@@ -190,21 +190,21 @@ Do not combine the framework, SimpleIni, and `{fmt}` major upgrades in one chang
 
 ## Validation Results
 
-This section records the final repository, build, and hardware checks for `AD2IOT-1117`.
+This section records the final repository, build, and hardware checks for `AD2IOT-1118`.
 
 - `tools/ci/validate_project.py`: pass.
-- `python -m unittest discover -s tools/ci/tests -p "test_*.py"`: pass; thirty security-default, Web authorization/session, WSS history allocation, bounded-config, hardware-helper, firmware size/identity, bounded-copy, factory-reset, and packaging regression tests.
+- `python -m unittest discover -s tools/ci/tests -p "test_*.py"`: pass; thirty-four security-default, Web authorization/session, WSS history allocation, bounded-config, SD version-policy/order/UI, incremental-version dependency, hardware-helper, firmware size/identity, bounded-copy, factory-reset, and packaging regression tests.
 - `node --check contrib/webUI/flash-drive/www/app.js`: pass.
 - `python -m compileall -q tools/ci tools/hil`: pass.
 - `git diff --check`: pass.
-- Clean `pio run -e esp32-poe-iso`: pass with remaining warnings listed above; 62,740 bytes static RAM (19.1%) and 1,542,461 bytes application flash (84.1%), below the 98,304/1,650,000-byte CI budgets.
+- Incremental and clean `pio run -e esp32-poe-iso`: pass with remaining warnings listed above; changing `version.txt` forced CMake to regenerate the application descriptor. The clean build used 62,740 bytes static RAM (19.1%) and 1,543,921 bytes application flash (84.1%), below the 98,304/1,650,000-byte CI budgets.
 - `pio run -e esp32-poe-iso -t buildfs`: pass.
-- Firmware image inspection: pass; `firmware.bin` contains `AD2IOT-1117` and the `Aug 11 2026 16:34:32` build timestamp; the validated image is 1,548,208 bytes.
+- Firmware image inspection: pass; `firmware.bin` contains `AD2IOT-1118` and the `Aug 11 2026 20:24:12` build timestamp; the validated image is 1,549,664 bytes.
 - `tools/ci/package_release.py` smoke test: pass; required binaries, SD-card bundle, and checksum manifest verified.
 - `actionlint` 1.7.12 against both workflow files: pass; the downloaded binary matched its published SHA-256 manifest.
 - GitHub-hosted execution: the Python 3.12/setuptools compatibility hotfix passed in [workflow run 31519749844](https://github.com/delphimon/AlarmDecoder-IoT/actions/runs/31519749844). The tagged `AD2IOT-1112` release build, tests, SPIFFS image, package, and Actions artifact passed in [workflow run 31527943625](https://github.com/delphimon/AlarmDecoder-IoT/actions/runs/31527943625). Its initial release-asset step exposed missing repository context in `gh release upload`; commit `9d01f02` supplies `--repo`, adds tag/version validation, and passed the subsequent [master build](https://github.com/delphimon/AlarmDecoder-IoT/actions/runs/31529380757). The verified 41-file Actions artifact was attached to the release and its public download hash was rechecked.
 - Latest GitHub-hosted execution: `AD2IOT-1117` commit `407eca3` passed all validation, 30 host tests, clean firmware/SPIFFS builds, identity/size budgets, and packaging in [workflow run 31547746943](https://github.com/delphimon/AlarmDecoder-IoT/actions/runs/31547746943), producing the non-expired `AD2IOT-1117-Release-Package` artifact.
-- Hardware update: `versionusd` validated the SD image identity, project, build timestamp, and size before `upgradeusd`; the device returned on `AD2IOT-1117` and removed `firmware.bin` after success.
-- Hardware HTTPS/WSS: public Let's Encrypt certificate and TLS 1.2 accepted; authenticated WSS opened in 633 ms and returned sync/history JSON plus pong with no protocol errors. REST Basic/cookie authentication returned 200 and a fresh anonymous connection received a complete 401 response.
+- Hardware update: `versionusd` validated the SD image identity, project, build timestamp, and size before `upgradeusd`; the device returned on `AD2IOT-1118` and removed `firmware.bin` after success. A subsequent valid 1117 image was blocked as a downgrade and a valid 1118 image was blocked as a same-version reinstall in both CLI and HTTPS API; neither exposed an enabled upgrade action, and the test file was removed.
+- Hardware HTTPS/WSS: public Let's Encrypt certificate and TLS 1.2 accepted; authenticated WSS opened in 611 ms and returned sync/history JSON plus pong with no protocol errors. REST Basic/cookie authentication returned 200 and a fresh anonymous connection received a complete 401 response.
 - Hardware configuration: active, SPIFFS, and SD views returned 20,439–21,249 byte redacted responses. The apparent SPIFFS secret match was confirmed to be the configured word appearing only in documentation/key text; its actual assignment was `[redacted]` and no configured assigned value leaked.
-- Hardware workload: the dependency-free smoke tool kept authenticated WSS open while nine configuration reads completed with 1,330 ms median/1,392 ms p95 and 25 smaller API calls completed with 62.3 ms median/66.0 ms p95. There were zero errors, uptime advanced, post-WSS free heap increased by 1,724 bytes, minimum free heap was 23,608 bytes, and no panic/OOM/watchdog entry appeared in the 64-line network-CLI history. Two earlier asynchronous-send warnings were caused by the test client closing before queued state output; after the client began waiting for the close handshake, the final run added no warning.
+- Hardware workload: the dependency-free smoke tool kept authenticated WSS open while nine configuration reads completed with 1,186 ms median/1,740 ms p95 and 25 smaller API calls completed with 60.7 ms median/73.9 ms p95. There were zero errors, uptime advanced, post-WSS free heap increased by 4,804 bytes, minimum free heap was 21,828 bytes, and no panic/OOM/watchdog entry appeared in the 64-line network-CLI history.

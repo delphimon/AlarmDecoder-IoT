@@ -37,6 +37,7 @@ static const char *TAG = "AD2LUPDATE";
 #include <esp_app_format.h>
 #include <mbedtls/sha256.h>
 #include <sys/stat.h>
+#include <stdint.h>
 #include <algorithm>
 
 //#define DEBUG_LUPDATE
@@ -62,6 +63,56 @@ static void usd_status_error(usd_firmware_status *status, const char *error)
 static bool usd_read_exact(FILE *file, void *buffer, size_t length)
 {
     return length == 0 || fread(buffer, 1, length, file) == length;
+}
+
+static bool usd_parse_release_number(const char *version, uint32_t *release)
+{
+    static const char prefix[] = "AD2IOT-";
+    if (!version || !release || strncmp(version, prefix, sizeof(prefix) - 1) != 0) {
+        return false;
+    }
+    const char *cursor = version + sizeof(prefix) - 1;
+    if (*cursor == '\0') {
+        return false;
+    }
+    uint32_t value = 0;
+    while (*cursor) {
+        if (*cursor < '0' || *cursor > '9') {
+            return false;
+        }
+        const uint32_t digit = (uint32_t)(*cursor - '0');
+        if (value > (UINT32_MAX - digit) / 10) {
+            return false;
+        }
+        value = value * 10 + digit;
+        cursor++;
+    }
+    *release = value;
+    return true;
+}
+
+static bool usd_apply_version_policy(usd_firmware_status *status, const char *installed_version)
+{
+    uint32_t candidate_release = 0;
+    uint32_t installed_release = 0;
+    if (!usd_parse_release_number(status->version, &candidate_release) ||
+            !usd_parse_release_number(installed_version, &installed_release)) {
+        usd_status_error(status, "Firmware release identity must match AD2IOT-<number>");
+        return false;
+    }
+    if (candidate_release == installed_release) {
+        status->same_version = true;
+        usd_status_error(status, "Firmware version matches the installed release");
+        return false;
+    }
+    if (candidate_release < installed_release) {
+        status->downgrade = true;
+        usd_status_error(status, "Firmware downgrade is blocked by policy");
+        return false;
+    }
+    status->newer_version = true;
+    status->version_policy_valid = true;
+    return true;
 }
 
 /**
@@ -233,6 +284,10 @@ bool usd_get_firmware_status(usd_firmware_status *status)
             break;
         }
 
+        status->integrity_valid = true;
+        if (!usd_apply_version_policy(status, ad2_firmware_version())) {
+            break;
+        }
         status->valid = true;
         status->error[0] = '\0';
         ok = true;
@@ -435,7 +490,8 @@ static struct cli_command uSDupdate_cmd_list[] = {
         (char*)USDUPDATE_UPGRADE_CMD,(char*)
         "Usage: upgradeusd\r\n"
         "\r\n"
-        "    Preform upgrade from connected uSD flash drive.\r\n"
+        "    Install a validated newer release from the connected uSD card.\r\n"
+        "    Same-version and downgrade images are rejected.\r\n"
         , usd_do_update
     },
     {
@@ -480,8 +536,7 @@ void usd_do_version(const char *arg)
                         "SD firmware is valid: version(%s), project(%s), built(%s %s), size(%u bytes)%s.\r\n",
                         firmware.version, firmware.project_name, firmware.build_date,
                         firmware.build_time, (unsigned)firmware.size_bytes,
-                        strcmp(firmware.version, ad2_firmware_version()) == 0 ?
-                        " [same as installed]" : " [available for upgrade]");
+                        " [available for upgrade]");
     } else {
         ad2_printf_host(false, "SD firmware is not available for upgrade: %s.\r\n",
                         firmware.error[0] ? firmware.error : "validation failed");

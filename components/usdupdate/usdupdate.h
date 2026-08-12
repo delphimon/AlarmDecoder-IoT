@@ -30,6 +30,11 @@ struct usd_firmware_status {
     bool sd_mounted;
     bool present;
     bool valid;
+    bool integrity_valid;
+    bool version_policy_valid;
+    bool newer_version;
+    bool same_version;
+    bool downgrade;
     bool update_in_progress;
     size_t size_bytes;
     char version[32];

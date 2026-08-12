@@ -262,7 +262,8 @@ Installed version(AD2IOT-1103) build flag (webui) available version(AD2IOT-1103)
 ```console
 Usage: upgradeusd
 
-    Perform a firmware upgrade by reading /sdcard/firmware.bin
+    Install a validated newer release from the connected uSD card.
+    Same-version and downgrade images are rejected.
 ```
 - versionusd
 ```console
@@ -275,6 +276,8 @@ AD2IOT # versionusd
 Installed version(AD2IOT-1108) build flag (webui).
 SD firmware is valid: version(AD2IOT-1109), project(alarmdecoder_ad2iot_esp32), built(Aug 04 2026 12:34:56), size(1531088 bytes) [available for upgrade].
 ```
+
+The candidate must have a strict `AD2IOT-<number>` identity greater than the installed release. The updater checks the ESP32 target, project, image structure, checksum, SHA-256 trailer, OTA partition bounds, and version policy before enabling installation. Same-version and older images remain on the card for diagnosis and are reported as blocked; use USB recovery when an intentional reinstall or downgrade is required. These checks prevent accidental wrong-image installation but do not authenticate the publisher, so only use firmware from a trusted release source.
 - netmode
 ```console
 Usage: netmode [(N | W | E)] [<arg>]
