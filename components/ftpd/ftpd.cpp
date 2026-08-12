@@ -42,6 +42,7 @@ extern "C" {
 }
 #endif
 #include <fstream>
+#include <sys/stat.h>
 
 #define FTPD_COMMAND          "ftpd"
 #define FTPD_SUBCMD_ENABLE    "enable"

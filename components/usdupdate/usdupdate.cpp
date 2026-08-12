@@ -35,7 +35,7 @@ static const char *TAG = "AD2LUPDATE";
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_app_format.h>
-#include <mbedtls/sha256.h>
+#include <psa/crypto.h>
 #include <sys/stat.h>
 #include <stdint.h>
 #include <algorithm>
@@ -63,6 +63,17 @@ static void usd_status_error(usd_firmware_status *status, const char *error)
 static bool usd_read_exact(FILE *file, void *buffer, size_t length)
 {
     return length == 0 || fread(buffer, 1, length, file) == length;
+}
+
+static bool usd_sha256_update(usd_firmware_status *status,
+                              psa_hash_operation_t *operation,
+                              const void *data, size_t length)
+{
+    if (psa_hash_update(operation, static_cast<const uint8_t *>(data), length) == PSA_SUCCESS) {
+        return true;
+    }
+    usd_status_error(status, "Unable to calculate the firmware SHA-256 hash");
+    return false;
 }
 
 static bool usd_parse_release_number(const char *version, uint32_t *release)
@@ -159,8 +170,7 @@ bool usd_get_firmware_status(usd_firmware_status *status)
 
     bool ok = false;
     uint8_t *buffer = NULL;
-    mbedtls_sha256_context sha;
-    mbedtls_sha256_init(&sha);
+    psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
     do {
         esp_image_header_t image_header;
         if (!usd_read_exact(file, &image_header, sizeof(image_header))) {
@@ -177,9 +187,12 @@ bool usd_get_firmware_status(usd_firmware_status *status)
             usd_status_error(status, "Firmware image is not for an ESP32");
             break;
         }
-        mbedtls_sha256_starts(&sha, 0);
-        mbedtls_sha256_update(&sha, (const unsigned char *)&image_header,
-                              sizeof(image_header));
+        if (psa_crypto_init() != PSA_SUCCESS ||
+                psa_hash_setup(&sha, PSA_ALG_SHA_256) != PSA_SUCCESS ||
+                !usd_sha256_update(status, &sha, &image_header, sizeof(image_header))) {
+            usd_status_error(status, "Unable to initialize firmware SHA-256 validation");
+            break;
+        }
 
         buffer = (uint8_t *)malloc(4096);
         if (!buffer) {
@@ -197,6 +210,7 @@ bool usd_get_firmware_status(usd_firmware_status *status)
         uint8_t checksum_block[16] = {0};
         unsigned char calculated_hash[32] = {0};
         unsigned char expected_hash[32] = {0};
+        size_t hash_length = 0;
 
         for (uint8_t segment_index = 0; segment_index < image_header.segment_count; segment_index++) {
             esp_image_segment_header_t segment_header;
@@ -211,8 +225,9 @@ bool usd_get_firmware_status(usd_firmware_status *status)
                 usd_status_error(status, "Firmware segment length is invalid");
                 goto validation_done;
             }
-            mbedtls_sha256_update(&sha, (const unsigned char *)&segment_header,
-                                  sizeof(segment_header));
+            if (!usd_sha256_update(status, &sha, &segment_header, sizeof(segment_header))) {
+                goto validation_done;
+            }
 
             size_t segment_read = 0;
             while (segment_read < segment_header.data_len) {
@@ -232,7 +247,9 @@ bool usd_get_firmware_status(usd_firmware_status *status)
                 for (size_t i = 0; i < chunk; i++) {
                     checksum ^= buffer[i];
                 }
-                mbedtls_sha256_update(&sha, buffer, chunk);
+                if (!usd_sha256_update(status, &sha, buffer, chunk)) {
+                    goto validation_done;
+                }
                 segment_read += chunk;
                 offset += chunk;
             }
@@ -266,9 +283,16 @@ bool usd_get_firmware_status(usd_firmware_status *status)
             usd_status_error(status, "Firmware checksum does not match");
             break;
         }
-        mbedtls_sha256_update(&sha, checksum_block, checksum_block_length);
+        if (!usd_sha256_update(status, &sha, checksum_block, checksum_block_length)) {
+            break;
+        }
 
-        mbedtls_sha256_finish(&sha, calculated_hash);
+        if (psa_hash_finish(&sha, calculated_hash, sizeof(calculated_hash),
+                            &hash_length) != PSA_SUCCESS ||
+                hash_length != sizeof(calculated_hash)) {
+            usd_status_error(status, "Unable to finish firmware SHA-256 validation");
+            break;
+        }
         if (image_header.hash_appended) {
             if (offset + sizeof(expected_hash) != status->size_bytes ||
                     !usd_read_exact(file, expected_hash, sizeof(expected_hash))) {
@@ -296,7 +320,7 @@ validation_done:
     } while (false);
 
     free(buffer);
-    mbedtls_sha256_free(&sha);
+    psa_hash_abort(&sha);
     fclose(file);
     return ok;
 }

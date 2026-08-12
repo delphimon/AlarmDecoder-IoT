@@ -185,8 +185,9 @@ int cli_read_bytes(uint8_t *buffer, size_t length, TickType_t timeout)
     FD_SET(socket_fd, &read_fds);
 
     struct timeval wait = {};
-    wait.tv_sec = timeout * portTICK_PERIOD_MS / 1000;
-    wait.tv_usec = (timeout * portTICK_PERIOD_MS % 1000) * 1000;
+    const uint32_t timeout_ms = pdTICKS_TO_MS(timeout);
+    wait.tv_sec = timeout_ms / 1000;
+    wait.tv_usec = (timeout_ms % 1000) * 1000;
     int result = select(socket_fd + 1, &read_fds, NULL, NULL, &wait);
     if (result == 0) {
         return 0;

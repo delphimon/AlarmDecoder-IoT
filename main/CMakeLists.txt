@@ -6,7 +6,7 @@ idf_component_register(SRCS "ad2_utils.cpp" "alarmdecoder_main.cpp"
                     REQUIRES idf::esp_wifi
                     REQUIRES idf::esp_eth
                     REQUIRES idf::spi_flash
-                    REQUIRES idf::json
+                    REQUIRES idf::espressif__cjson
                     REQUIRES idf::fatfs
                     REQUIRES idf::esp_http_client
                     REQUIRES idf::spiffs

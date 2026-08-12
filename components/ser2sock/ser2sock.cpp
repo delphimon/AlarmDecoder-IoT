@@ -35,11 +35,7 @@ static const char *TAG = "SER2SOCKD";
 // AlarmDecoder std includes
 #include "alarmdecoder_main.h"
 
-// esp component includes
-#include "mbedtls/net_sockets.h"
-#include "mbedtls/entropy.h"
-#include "mbedtls/ctr_drbg.h"
-#include "mbedtls/error.h"
+// ESP-IDF component includes
 #include "esp_system.h"
 
 // specific includes

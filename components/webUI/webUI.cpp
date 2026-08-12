@@ -31,6 +31,7 @@ static const char *TAG = "WEBUI";
 // AlarmDecoder std includes
 #include <algorithm>
 #include <ctime>
+#include <sys/stat.h>
 #include "alarmdecoder_main.h"
 
 // esp component includes

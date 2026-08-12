@@ -1,6 +1,6 @@
 idf_component_register(SRCS "webUI.cpp" "TinyTemplateEngine.cpp" "TinyTemplateEngineFileReader.cpp"
                     REQUIRES idf::esp-tls
-                    REQUIRES idf::json
+                    REQUIRES idf::espressif__cjson
                     REQUIRES idf::esp_http_client
                     REQUIRES idf::alarmdecoder-api
                     REQUIRES idf::esp_http_server

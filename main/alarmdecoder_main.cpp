@@ -1315,8 +1315,8 @@ extern "C" {
             /**
              * Initialize SmartThings SDK
              *
-             *  WARNING: If enabled it will consume the esp_event_loop_init and
-             * only one task can create this.
+             * WARNING: The SDK expects to own initialization of the default
+             * event loop, so enable it only in the dedicated network mode.
              */
             stsdk_init();
 

@@ -158,6 +158,16 @@ esp_err_t _pushover_http_event_handler(esp_http_client_event_t *evt)
         ESP_LOGI(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
 #endif
         break;
+    case HTTP_EVENT_ON_HEADERS_COMPLETE:
+#if defined(DEBUG_PUSHOVER)
+        ESP_LOGI(TAG, "HTTP_EVENT_ON_HEADERS_COMPLETE");
+#endif
+        break;
+    case HTTP_EVENT_ON_STATUS_CODE:
+#if defined(DEBUG_PUSHOVER)
+        ESP_LOGI(TAG, "HTTP_EVENT_ON_STATUS_CODE");
+#endif
+        break;
     case HTTP_EVENT_ERROR:
 #if defined(DEBUG_PUSHOVER)
         ESP_LOGI(TAG, "HTTP_EVENT_ERROR");

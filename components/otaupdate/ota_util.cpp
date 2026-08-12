@@ -37,8 +37,10 @@ static const char *TAG = "AD2OTA";
 // esp component includes
 #include <esp_https_ota.h>
 #include <esp_ota_ops.h>
-#include "mbedtls/sha256.h"
+#include "mbedtls/pk.h"
+#include "mbedtls/rsa.h"
 #include "mbedtls/ssl.h"
+#include "psa/crypto.h"
 
 //#define DEBUG_OTA
 
@@ -245,11 +247,17 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     case HTTP_EVENT_ON_CONNECTED:
         ESP_LOGI(TAG, "%s: HTTP_EVENT_ON_CONNECTED", __func__);
         break;
-    case HTTP_EVENT_HEADER_SENT:
-        ESP_LOGI(TAG, "%s: HTTP_EVENT_HEADER_SENT", __func__);
+    case HTTP_EVENT_HEADERS_SENT:
+        ESP_LOGI(TAG, "%s: HTTP_EVENT_HEADERS_SENT", __func__);
         break;
     case HTTP_EVENT_ON_HEADER:
         ESP_LOGI(TAG, "%s: HTTP_EVENT_ON_HEADER, key=%s, value=%s", __func__, evt->header_key, evt->header_value);
+        break;
+    case HTTP_EVENT_ON_HEADERS_COMPLETE:
+        ESP_LOGI(TAG, "%s: HTTP_EVENT_ON_HEADERS_COMPLETE", __func__);
+        break;
+    case HTTP_EVENT_ON_STATUS_CODE:
+        ESP_LOGI(TAG, "%s: HTTP_EVENT_ON_STATUS_CODE", __func__);
         break;
     case HTTP_EVENT_ON_DATA:
         ESP_LOGI(TAG, "%s: HTTP_EVENT_ON_DATA, len=%d", __func__, evt->data_len);
@@ -259,6 +267,9 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
         break;
     case HTTP_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "%s: HTTP_EVENT_DISCONNECTED", __func__);
+        break;
+    case HTTP_EVENT_REDIRECT:
+        ESP_LOGI(TAG, "%s: HTTP_EVENT_REDIRECT", __func__);
         break;
     }
 #endif
@@ -290,13 +301,17 @@ static void _print_sha256 (const uint8_t *image_hash, const char *label)
 
 static int _crypto_sha256(const unsigned char *src, size_t src_len, unsigned char *dst)
 {
-    int ret;
 #if defined(DEBUG_OTA)
     ESP_LOGI(TAG, "%s: src: %d@%p, dst: %p", __func__, src_len, src, dst);
 #endif
-    mbedtls_sha256(src, src_len, dst, 0);
-
-    return 1;
+    size_t hash_length = 0;
+    if (psa_crypto_init() != PSA_SUCCESS) {
+        return -1;
+    }
+    const psa_status_t status = psa_hash_compute(PSA_ALG_SHA_256, src, src_len,
+                                                 dst, OTA_CRYPTO_SHA256_LEN,
+                                                 &hash_length);
+    return status == PSA_SUCCESS && hash_length == OTA_CRYPTO_SHA256_LEN ? 0 : -1;
 }
 
 /**
@@ -430,11 +445,12 @@ esp_err_t ota_https_update_device(const char *buildflags)
     unsigned int total_read_len = 0;
     unsigned int remain_len = 0;
     unsigned int excess_len = 0;
+    size_t hash_length = 0;
     esp_ota_handle_t update_handle = 0;
     const esp_partition_t *update_partition = NULL;
     unsigned char md[OTA_CRYPTO_SHA256_LEN] = {0,};
     esp_err_t ota_write_err = ESP_OK;
-    mbedtls_sha256_context ctx;
+    psa_hash_operation_t hash_operation = PSA_HASH_OPERATION_INIT;
     char *upgrade_data_buf = nullptr;
     esp_http_client_handle_t client = nullptr;
 
@@ -511,10 +527,13 @@ esp_err_t ota_https_update_device(const char *buildflags)
 
     sig_ptr = sig;
 
-    mbedtls_sha256_init( &ctx );
+    if (psa_crypto_init() != PSA_SUCCESS ||
+            psa_hash_setup(&hash_operation, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "%s: Unable to initialize SHA-256", __func__);
+        ret = ESP_FAIL;
+        goto clean_up;
+    }
     b_ctx_init = true;
-
-    mbedtls_sha256_starts( &ctx, 0);
 
     while (1) {
         int data_read = esp_http_client_read(client, upgrade_data_buf, OTA_DEFAULT_BUF_SIZE);
@@ -549,7 +568,13 @@ esp_err_t ota_https_update_device(const char *buildflags)
         }
 
         if (data_read > 0) {
-            mbedtls_sha256_update(&ctx, (const unsigned char *)upgrade_data_buf, data_read);
+            if (psa_hash_update(&hash_operation,
+                                reinterpret_cast<const uint8_t *>(upgrade_data_buf),
+                                data_read) != PSA_SUCCESS) {
+                ESP_LOGE(TAG, "%s: Unable to update SHA-256", __func__);
+                ret = ESP_FAIL;
+                goto clean_up;
+            }
 
             ota_write_err = esp_ota_write( update_handle, (const void *)upgrade_data_buf, data_read);
             if (ota_write_err != ESP_OK) {
@@ -562,7 +587,13 @@ esp_err_t ota_https_update_device(const char *buildflags)
 #if defined(DEBUG_OTA)
     ESP_LOGI(TAG, "%s: Total binary data length writen: %d", __func__, total_read_len);
 #endif
-    mbedtls_sha256_finish( &ctx, md);
+    if (psa_hash_finish(&hash_operation, md, sizeof(md), &hash_length) != PSA_SUCCESS ||
+            hash_length != sizeof(md)) {
+        ESP_LOGE(TAG, "%s: Unable to finish SHA-256", __func__);
+        ret = ESP_FAIL;
+        goto clean_up;
+    }
+    b_ctx_init = false;
 
     /* Check firmware validation */
     if (_check_firmware_validation((const unsigned char *)md, sig, sig_len) != true) {
@@ -591,7 +622,7 @@ esp_err_t ota_https_update_device(const char *buildflags)
 #endif
 clean_up:
     if (b_ctx_init) {
-        mbedtls_sha256_free(&ctx);
+        psa_hash_abort(&hash_operation);
     }
 
     if (sig) {

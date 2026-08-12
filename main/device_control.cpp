@@ -688,13 +688,18 @@ void hal_init_eth(std::string &args)
     phy_config.phy_addr = CONFIG_AD2IOT_ETH_PHY_ADDR;
     phy_config.reset_gpio_num = CONFIG_AD2IOT_ETH_PHY_RST_GPIO;
     phy_config.reset_timeout_ms = 100;
+    // IDF 6 removed chip-specific LAN87xx constructors. The OLIMEX board's
+    // LAN8710A is IEEE 802.3 compliant, so use the generic driver while
+    // preserving the former LAN87xx reset timings.
+    phy_config.hw_reset_assert_time_us = 150;
+    phy_config.post_hw_reset_delay_ms = -1;
 
 #if CONFIG_AD2IOT_USE_INTERNAL_ETHERNET
     emac_config.smi_gpio.mdc_num = (gpio_num_t)CONFIG_AD2IOT_ETH_MDC_GPIO;
     emac_config.smi_gpio.mdio_num = (gpio_num_t)CONFIG_AD2IOT_ETH_MDIO_GPIO;
     esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&emac_config, &mac_config);
 #ifdef CONFIG_AD2IOT_ETH_PHY_LAN8720
-    esp_eth_phy_t *phy = esp_eth_phy_new_lan87xx(&phy_config);
+    esp_eth_phy_t *phy = esp_eth_phy_new_generic(&phy_config);
 #endif
 #endif
 

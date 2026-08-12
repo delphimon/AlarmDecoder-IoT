@@ -4,6 +4,6 @@ idf_component_register(SRCS "usdupdate.cpp"
                     REQUIRES idf::app_update
                     REQUIRES idf::esp-tls
                     REQUIRES idf::esp_https_ota
-                    REQUIRES idf::json
+                    REQUIRES idf::espressif__cjson
                     REQUIRES idf::mbedtls
                     INCLUDE_DIRS . ../../main/)

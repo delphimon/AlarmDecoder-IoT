@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1122` for the ESP-IDF 6.0/GCC 15 migration build.
+- [x] TOOLCHAIN: upgrade PlatformIO Espressif32 6.13/ESP-IDF 5.5.3/GCC 14.2 to 7.0/ESP-IDF 6.0/GCC 15.2 and migrate active code away from APIs removed or deprecated by the new major framework.
+- [x] DEPENDENCIES: move cJSON 1.7.19~2 and ESP-MQTT 1.0.0 to exact ESP Component Registry pins with a committed dependency lock; retain exact SimpleIni 4.26 and `{fmt}` 12.2.0 sources.
+- [x] API/BUILD: replace the removed LAN87xx constructor with ESP-IDF's generic IEEE 802.3 PHY while preserving reset timing, migrate firmware hashes from removed public Mbed TLS SHA-256 contexts to checked PSA Crypto operations, handle the complete ESP-IDF 6 HTTP event set, use explicit POSIX stat declarations required by Picolibc, and remove the final project-owned legacy tick conversion.
+- [x] RELIABILITY/OTA: make the OTA SHA-256 helper report success after a valid digest instead of unconditionally failing, and propagate every PSA initialization/update/finalization error in OTA and SD image validation.
+- [x] CI/TEST: include the component manifest and dependency lock in PlatformIO cache invalidation, expand the host suite to 49 checks, and verify a clean firmware/SPIFFS build plus release-package smoke test on the new framework within the existing RAM and flash budgets.
+- [ ] TEST/HARDWARE: install `AD2IOT-1122` and rerun HTTPS/WSS, configuration, network-CLI, SD update, and heap-retention checks; the installed `AD2IOT-1121` baseline passed before the device endpoint became unreachable, and no firmware transfer or upgrade command was started.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1121` after final outbound trust-store hardening.
 - [x] SECURITY/TLS: remove the legacy self-signed AlarmDecoder OTA CA from the production trust store; retain ESP-IDF's public bundle by default and document private outbound roots as an explicit build-time opt-in.
 - [x] TEST/HARDWARE: install AD2IOT-1121 through the validated SD updater and verify public-certificate HTTPS, authenticated WSS, trusted time, all configuration sources, 52 browser-equivalent REST requests, network-CLI version/log diagnostics, and no critical runtime signatures.
@@ -65,11 +72,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - [x] SECURITY: require authentication and authorization for web alarm controls and diagnostic/configuration APIs; the service now fails closed instead of relying on an allow-all IP ACL.
 - [x] SECURITY: disable unauthenticated FTP by default and require credentials plus a valid ACL before startup.
 - [ ] SECURITY: independently authorize firmware installation and prevent installation of unsigned firmware, including through FTP. Wrong-project/chip images and disallowed downgrades are now rejected.
-- [ ] SECURITY: enable outbound TLS peer verification and add signed firmware plus boot rollback before treating remote or SD updates as trusted. A strict numeric release policy is now enforced.
+- [ ] SECURITY: add signed firmware plus boot rollback before treating remote or SD updates as trusted. Outbound TLS peer verification and a strict numeric release policy are now enforced.
 - [x] RELIABILITY: bound Wi-Fi SSID/password copies and make factory reset handle the higher-priority SD configuration safely.
 - [ ] RELIABILITY: centralize restart cleanup across network, storage, and integration services.
 - [ ] TEST: add functional parser and redaction tests plus hardware-in-loop authorization, HTTPS/WSS, update, and restart smoke coverage. Static path/action/session regression checks are now present.
-- [x] TOOLCHAIN: migrate from PlatformIO Espressif32 6.4/ESP-IDF 5.1.1 to 6.13/ESP-IDF 5.5.3 in a dedicated compatibility change; ESP-IDF 6 remains a separate evaluation.
+- [x] TOOLCHAIN: migrate through PlatformIO Espressif32 6.13/ESP-IDF 5.5.3 to PlatformIO Espressif32 7.0/ESP-IDF 6.0 with exact managed MQTT/cJSON dependencies and removed-API regression checks.
 - [x] TOOLCHAIN: compatibility-test updates from SimpleIni 4.19 to 4.26 and `{fmt}` 8.0.1 to 12.2.0.
 - [ ] STYLE: add a non-mutating format/style check after agreeing on a repository-wide baseline; the existing tree is not yet style-clean.
 

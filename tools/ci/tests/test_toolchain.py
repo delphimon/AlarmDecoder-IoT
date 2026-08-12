@@ -1,4 +1,4 @@
-"""Regression checks for the reproducible ESP-IDF 5.5 toolchain migration."""
+"""Regression checks for the reproducible ESP-IDF 6.0 toolchain migration."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class ToolchainTests(unittest.TestCase):
         platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 
-        self.assertIn("platform = espressif32@=6.13.0", platformio)
+        self.assertIn("platform = espressif32@=7.0.0", platformio)
         self.assertIn("cmake_minimum_required(VERSION 3.16)", cmake)
 
     def test_simpleini_has_one_exact_dependency_source(self) -> None:
@@ -32,6 +32,32 @@ class ToolchainTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("#define FMT_VERSION 120200", fmt_base)
+
+    def test_idf6_external_components_are_exactly_pinned(self) -> None:
+        manifest = (ROOT / "main" / "idf_component.yml").read_text(encoding="utf-8")
+        lock = (ROOT / "dependencies.lock").read_text(encoding="utf-8")
+
+        self.assertIn('espressif/cjson: "==1.7.19~2"', manifest)
+        self.assertIn('espressif/mqtt: "==1.0.0"', manifest)
+        self.assertIn("version: 1.7.19~2", lock)
+        self.assertIn("version: 1.0.0", lock)
+        self.assertIn("version: 6.0.0", lock)
+
+    def test_removed_idf5_apis_are_not_used_by_primary_sources(self) -> None:
+        source_paths = list((ROOT / "main").glob("*.cpp"))
+        source_paths.extend((ROOT / "components").glob("*/**/*.cpp"))
+        source_paths = [path for path in source_paths if "stsdk" not in path.parts]
+        source = "\n".join(path.read_text(encoding="utf-8") for path in source_paths)
+
+        for removed in (
+            "esp_eth_phy_new_lan87xx",
+            "HTTP_EVENT_HEADER_SENT",
+            "mbedtls_sha256_",
+            '"mbedtls/entropy.h"',
+            '"mbedtls/ctr_drbg.h"',
+        ):
+            with self.subTest(api=removed):
+                self.assertNotIn(removed, source)
 
     def test_primary_components_do_not_create_nested_projects(self) -> None:
         component_root = ROOT / "components"
@@ -57,9 +83,11 @@ class ToolchainTests(unittest.TestCase):
         self.assertIn("PLATFORMIO_CORE_VERSION: 6.1.19", workflow)
         self.assertIn("INTELHEX_VERSION: 2.3.0", workflow)
         self.assertIn('"intelhex==${INTELHEX_VERSION}"', workflow)
-        self.assertIn("pio-v2-", workflow)
+        self.assertIn("pio-v3-", workflow)
         self.assertNotIn("restore-keys:", workflow)
         self.assertIn("'main/CMakeLists.txt'", workflow)
+        self.assertIn("'main/idf_component.yml'", workflow)
+        self.assertIn("'dependencies.lock'", workflow)
 
 
 if __name__ == "__main__":
