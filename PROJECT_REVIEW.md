@@ -2,7 +2,7 @@
 
 Review date: 2026-08-11
 
-Reviewed baseline: `AD2IOT-1118`, including authenticated Web/API access, bounded TLS diagnostics, strict SD update version policy, expanded security regressions, and repeatable hardware validation
+Reviewed baseline: `AD2IOT-1119`, including the hardware-validated ESP-IDF 5.5 toolchain migration, current library pins, authenticated Web/API access, bounded TLS diagnostics, and strict SD update policy
 
 Primary shipped target: `esp32-poe-iso` Web UI firmware
 
@@ -10,18 +10,18 @@ Deferred scope: SmartThings integration
 
 ## Executive Summary
 
-AlarmDecoder-IoT is a capable ESP32 alarm-panel appliance with Ethernet/Wi-Fi, an AlarmDecoder parser, MQTT/Home Assistant support, browser controls, optional HTTPS/WSS, serial-over-TCP, serial and authenticated network CLIs, notification providers, SD/SPIFFS configuration, and SD firmware update support. The recent `AD2IOT-1108` through `AD2IOT-1118` work materially improved operator visibility and reliability: exact activity timestamps, readable zone cards, firmware inspection/update and restart controls, a Settings pane, bounded diagnostic history, network-CLI log access, optional rotating SD logs, TLS resource diagnostics, authenticated Web/API access, bounded configuration streaming, lower-copy WSS history delivery, and strict SD release ordering are now present.
+AlarmDecoder-IoT is a capable ESP32 alarm-panel appliance with Ethernet/Wi-Fi, an AlarmDecoder parser, MQTT/Home Assistant support, browser controls, optional HTTPS/WSS, serial-over-TCP, serial and authenticated network CLIs, notification providers, SD/SPIFFS configuration, and SD firmware update support. The recent `AD2IOT-1108` through `AD2IOT-1119` work materially improved operator visibility, reliability, and maintainability: exact activity timestamps, readable zone cards, firmware inspection/update and restart controls, a Settings pane, bounded diagnostic history, network-CLI log access, optional rotating SD logs, TLS resource diagnostics, authenticated Web/API access, bounded configuration streaming, strict SD release ordering, and an ESP-IDF 5.5/GCC 14 migration are now present.
 
 The Web UI's former P0 exposure is addressed in `AD2IOT-1113` through `AD2IOT-1118`: the service is disabled by default, ships without credentials, refuses invalid startup configuration, and authenticates static files, diagnostic APIs, maintenance actions, and WebSocket commands. HTTP Basic credentials establish a random reboot-scoped browser session, and browser command paths enforce same-origin and custom-header controls. Large configuration views are redacted and streamed in bounded chunks so they fit beside the persistent WSS session on the constrained ESP32. FTP is also disabled by default and fails closed on invalid credentials or access controls. The device still should not be internet-exposed: Basic authentication over plain HTTP is observable, outbound TLS peer verification remains globally disabled, and firmware is not signed or protected by boot rollback. SD updates now require a structurally valid, strictly newer numeric release, but this is an accidental-installation control rather than publisher authentication.
 
-The dependency-free host regression suite has grown from six to thirty-four checks covering externally reachable service defaults, Web UI authorization guard placement, WSS session state/history allocation, origin/action guards, persistent cookie storage, browser credential behavior, bounded configuration streaming, traversal rejection, SD update policy, hardware-smoke helpers, firmware size/identity enforcement, and release-package checksums. CI validates those tests and repository inputs, compiles the primary board on pushes and pull requests, enforces RAM/flash budgets and embedded version identity, builds SPIFFS, creates checksummed/versioned packages, and reuses the same build for releases. The read-only hardware smoke tool covers verified HTTPS/WSS authentication, REST/configuration stability, secret redaction, version/uptime, heap retention, and the browser-equivalent two-session workload. Panel actions, failure injection, certificate renewal, Wi-Fi failover, rollback, and sustained hardware testing remain incomplete.
+The dependency-free host regression suite has grown from six to forty checks covering externally reachable service defaults, Web UI authorization guard placement, WSS session state/history allocation, origin/action guards, persistent cookie storage, browser credential behavior, bounded configuration streaming, traversal rejection, SD update policy, hardware-smoke helpers, firmware size/identity enforcement, release-package checksums, and exact toolchain/library pins. CI validates those tests and repository inputs, compiles the primary board on pushes and pull requests, enforces RAM/flash budgets and embedded version identity, builds SPIFFS, creates checksummed/versioned packages, and reuses the same build for releases. The read-only hardware smoke tool covers verified HTTPS/WSS authentication, REST/configuration stability, secret redaction, version/uptime, heap retention, and the browser-equivalent two-session workload. Panel actions, failure injection, certificate renewal, Wi-Fi failover, rollback, and sustained hardware testing remain incomplete.
 
 ## Verification Performed
 
 - Reviewed source, default and generated SDK configuration, partition layout, Web UI assets and API description, CLI/network CLI, FTP, SD update, logging, HTTPS/WSS resource handling, documentation, and both GitHub workflows.
-- Confirmed `version.txt` is the firmware identity source and advanced it for every complete hardware candidate through `AD2IOT-1118`; CMake now observes the file so incremental builds cannot retain the prior identity.
+- Confirmed `version.txt` is the firmware identity source and advanced it for every complete hardware candidate through `AD2IOT-1119`; CMake observes the file so incremental builds cannot retain the prior identity.
 - Ran dependency-free repository and host regression tests, browser JavaScript syntax checking, Python compile checking, whitespace checking, the full `esp32-poe-iso` firmware and SPIFFS builds, and release-package verification. Exact final results are listed in **Validation Results**.
-- Installed `AD2IOT-1115` through `AD2IOT-1118` through the validated SD updater on the Ethernet device. Exercised a public Let's Encrypt HTTPS certificate, Basic/cookie authentication, clean unauthenticated rejection, WSS sync/ping/history, the Settings APIs, network-CLI logs, repeated REST/configuration traffic, and same-version/downgrade update rejection. No alarm-panel control or emergency action was sent. Wi-Fi failover, certificate renewal, SD failure injection, abrupt-power recovery, and rollback were not exercised.
+- Installed `AD2IOT-1115` through `AD2IOT-1119` through the validated SD updater on the Ethernet device. Exercised a public Let's Encrypt HTTPS certificate, Basic/cookie authentication, clean unauthenticated rejection, WSS sync/ping/history, the Settings APIs, network-CLI logs, repeated REST/configuration traffic, and update policy. No alarm-panel control or emergency action was sent. Wi-Fi failover, certificate renewal, SD failure injection, abrupt-power recovery, and rollback were not exercised.
 
 ## Highest-Priority TODOs
 
@@ -76,7 +76,7 @@ The SD update path now reports installed and card-image versions, validates size
 
 - there is no release signature or approved digest;
 - chip ID, project identity, and numeric upgrade direction are checked, but there is no independently authenticated board/release-channel manifest;
-- `CONFIG_APP_ROLLBACK_ENABLE` is disabled in `sdkconfig.esp32-poe-iso:1703`;
+- `CONFIG_APP_ROLLBACK_ENABLE` is disabled in `sdkconfig.esp32-poe-iso:2134`;
 - secure boot and flash encryption are disabled.
 
 Checksummed CI packages help detect accidental download corruption but are not a device-enforced authenticity control.
@@ -136,7 +136,7 @@ Optional SD logging survives reboot and is asynchronous/rotating, but adds card 
 The workflows were modernized in `AD2IOT-1111` and made clean-runner compatible in `AD2IOT-1112`:
 
 - `.github/workflows/build.yml` now runs on pull requests as well as pushes/manual calls and can be invoked as a reusable workflow.
-- PlatformIO Core is pinned to 6.1.19, Python to 3.12, and setuptools to 80.9.0 because Espressif32 6.4 imports the legacy `pkg_resources` module. GitHub Actions use explicit release versions rather than floating old majors.
+- PlatformIO Core is pinned to 6.1.19 and Python to 3.12. The ESP-IDF 5.5 migration removed the former `pkg_resources`/setuptools compatibility shim. GitHub Actions use explicit release versions rather than floating old majors.
 - Least-privilege permissions, concurrency control, timeouts, PlatformIO package caching, version/changelog/web validation, host regression tests, and JavaScript syntax checking are enforced.
 - The build log is checked against explicit 98,304-byte static-RAM and 1,650,000-byte application-flash budgets before packaging.
 - The ESP application descriptor is parsed after compilation, preventing a stale binary with an embedded version that differs from `version.txt` from reaching a package or release.
@@ -158,16 +158,25 @@ Remaining CI opportunities, in priority order:
 | Component | Repository / workflow | Current upstream reviewed | Assessment and action |
 |---|---:|---:|---|
 | PlatformIO Core | 6.1.19 | 6.1.19 | Now pinned and current. |
-| Python in CI | 3.12 with setuptools 80.9.0 | Newer Python versions are available | Compatibility pin for Espressif32 6.4's legacy `pkg_resources` import; remove after the framework migration. |
-| PlatformIO Espressif32 | 6.4.0 | 6.13.0 (ESP-IDF 5.5.3) and 7.0.0 (ESP-IDF 6.0) | High-value upgrade. Move first to 6.13/IDF 5.5.3; treat 7.0/IDF 6 as a separate breaking migration. |
-| ESP-IDF | 5.1.1 | 5.5.3 supported; 6.0.x current major | 5.1.1 is old and misses years of fixes. Upgrade with warning cleanup and hardware regression testing. |
-| SimpleIni | 4.19 | 4.26 | Compatibility-test 4.26; pin to a release tag or commit after the firmware build passes. |
-| `{fmt}` submodule | 8.0.1 | 12.2.0 | Several majors behind. Upgrade separately because API/compile behavior changed and this runs on constrained firmware. |
+| Python in CI | 3.12 | Newer Python versions are available | Supported and reproducible; no framework-specific setuptools shim remains. |
+| PlatformIO Espressif32 | 6.13.0 | 6.13.0 (ESP-IDF 5.5.3) and 7.0.x (ESP-IDF 6.0) | Upgraded. Treat 7.x/IDF 6 as a separate breaking migration. |
+| ESP-IDF | 5.5.3 | 5.5.x supported; 6.0.x current major | Upgraded to the current PlatformIO 6.x line; generated configuration and hardware behavior require regression validation before IDF 6. |
+| SimpleIni | 4.26, commit `877f735` | 4.26 | Upgraded and linked through its canonical header-only CMake target from one exact dependency source. |
+| `{fmt}` submodule | 12.2.0, commit `1be298e` | 12.2.0 | Upgraded; `fmt::runtime` behavior retained and GCC 14 compatibility restored. |
 | GitHub Actions | checkout 6.0.2, setup-python 7.0.0, cache 5.0.5, upload-artifact 7.0.1, download-artifact 8.0.1 | Same reviewed releases | Updated; Dependabot will keep these visible. Node 24 actions require runner 2.327.1+, which GitHub-hosted `ubuntu-latest` satisfies. |
 
 Primary version sources reviewed: [PlatformIO Espressif32 releases](https://github.com/platformio/platform-espressif32/releases), [ESP-IDF releases](https://github.com/espressif/esp-idf/releases), [PlatformIO Core releases](https://github.com/platformio/platformio-core/releases), [SimpleIni releases](https://github.com/brofield/simpleini/releases), [{fmt} releases](https://github.com/fmtlib/fmt/releases), and the official GitHub Actions release pages.
 
-Do not combine the framework, SimpleIni, and `{fmt}` major upgrades in one change. First make the present build warning-clean and add parser/config smoke tests; then move to Espressif32 6.13, validate on hardware, and only afterward evaluate ESP-IDF 6.
+`AD2IOT-1119` combines the closely coupled framework/compiler compatibility fixes and library pins in one hardware candidate because GCC 14 could not compile the old `{fmt}` release and SimpleIni 4.26 changed to a canonical header-only CMake integration. ESP-IDF 6 remains intentionally separate: ESP-MQTT moves to a managed component, additional legacy compatibility is removed, and its resource impact needs a new baseline.
+
+### API migration findings
+
+- GCC 14/ESP-IDF 5.5 identified the removed compatibility path first: `eth_esp32_emac_config_t::smi_mdc_gpio_num` and `smi_mdio_gpio_num` were replaced with `smi_gpio.mdc_num` and `smi_gpio.mdio_num`.
+- Project-owned code does not directly include the deprecated ADC, DAC, I2C, I2S, MCPWM, PCNT, RMT, or legacy timer headers. Their `driver/deprecated` objects appearing in a verbose link are ESP-IDF compatibility components, not evidence that AlarmDecoder-IoT calls those APIs.
+- Millisecond delays and UART read timeouts now use `pdMS_TO_TICKS`; the remaining `portTICK_PERIOD_MS` use converts an already tick-based socket timeout into `timeval` units and is intentional.
+- `esp_http_client`, the IDF 5.5 nested `esp_mqtt_client_config_t` layout, `esp_vfs_fat_sdmmc_mount`, and the streaming `mbedtls_sha256_*` functions used by image validation are supported in the selected framework and produced no deprecation diagnostics. PSA Crypto could replace direct SHA contexts, but that is not currently a functional or resource win for sequential firmware hashing.
+- Component `CMakeLists.txt` files no longer invoke nested `project()` commands, dead pre-IDF-4.1 certificate embedding is removed, UART configuration is stack allocated, and inactive SmartThings Kconfig/CMake dependencies no longer participate in the primary build.
+- ESP-IDF log v2, binary logging, certificate-bundle attachment, and newer driver lifecycle APIs are available. Log v1 is deliberately retained until size/runtime measurements exist; certificate-bundle attachment is the preferred next security capability because the current global insecure outbound-TLS flags still override peer authentication.
 
 ## Optimization Opportunities
 
@@ -175,7 +184,10 @@ Do not combine the framework, SimpleIni, and `{fmt}` major upgrades in one chang
 - Keep HTTPS requests serialized and expose peak/low-water heap per TLS operation. The two-session design now passes the repeatable hardware smoke threshold but still needs sustained and failure-injection testing.
 - Add app-size and static-RAM reports to CI so toolchain/library upgrades cannot silently consume the OTA or TLS headroom.
 - Consolidate restart entry points around one shutdown coordinator for Web UI, ser2sock, network CLI, FTP, MQTT, and SD logging.
-- Continue clearing project-owned warnings before enabling warnings-as-errors; deprecated trimming adapters and unsafe GPIO shift operands are already resolved.
+- Keep project-owned code warning-clean under GCC 14 before enabling warnings-as-errors globally; deferred SmartThings and third-party source still need their own policy.
+- Replace globally insecure outbound TLS with `esp_crt_bundle_attach`/explicit CA configuration per client, then disable `CONFIG_ESP_TLS_INSECURE` and `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY` after clock/trust failure-path tests.
+- Evaluate ESP-IDF log v2 and binary logging only with measured flash/RAM/runtime cost; the migration deliberately retains log v1 for compatibility and constrained-device stability.
+- Before ESP-IDF 6, move ESP-MQTT to a pinned managed component and audit network/storage teardown against the newer driver lifecycle APIs.
 - Avoid synchronous SD work on request/control paths; retain the asynchronous queue and report queue drops/write failures as already implemented.
 - Separate active production components from deferred/experimental integrations in documentation and build configuration. SmartThings can remain source-retained without blocking the main firmware roadmap.
 
@@ -185,26 +197,26 @@ Do not combine the framework, SimpleIni, and `{fmt}` major upgrades in one chang
 2. Add functional parser/redaction tests and hardware negative tests for the new HTTP/WSS authorization boundary.
 3. Enable outbound certificate verification with trust/time failure-path tests.
 4. Centralize restart cleanup and exercise update/restart recovery on hardware.
-5. Clean current compiler warnings and migrate to Espressif32 6.13 / ESP-IDF 5.5.3.
-6. Expand hardware-in-loop coverage, then evaluate library upgrades and ESP-IDF 6.
+5. Expand hardware-in-loop coverage and runtime size/heap gates.
+6. Move ESP-MQTT to a pinned managed component, then evaluate ESP-IDF 6 as a separate migration.
 
 ## Validation Results
 
-This section records the final repository, build, and hardware checks for `AD2IOT-1118`.
+This section records the final repository, build, and hardware checks for `AD2IOT-1119`.
 
 - `tools/ci/validate_project.py`: pass.
-- `python -m unittest discover -s tools/ci/tests -p "test_*.py"`: pass; thirty-four security-default, Web authorization/session, WSS history allocation, bounded-config, SD version-policy/order/UI, incremental-version dependency, hardware-helper, firmware size/identity, bounded-copy, factory-reset, and packaging regression tests.
+- `python -m unittest discover -s tools/ci/tests -p "test_*.py"`: pass; forty security-default, Web authorization/session, WSS history allocation, bounded-config, SD version-policy/order/UI, incremental-version dependency, hardware-helper, firmware size/identity, bounded-copy, factory-reset, packaging, and exact toolchain/dependency regression tests.
 - `node --check contrib/webUI/flash-drive/www/app.js`: pass.
 - `python -m compileall -q tools/ci tools/hil`: pass.
 - `git diff --check`: pass.
-- Incremental and clean `pio run -e esp32-poe-iso`: pass with remaining warnings listed above; changing `version.txt` forced CMake to regenerate the application descriptor. The clean build used 62,740 bytes static RAM (19.1%) and 1,543,921 bytes application flash (84.1%), below the 98,304/1,650,000-byte CI budgets.
+- Incremental and from-scratch `pio run -e esp32-poe-iso`: pass on PlatformIO Espressif32 6.13.0, ESP-IDF 5.5.3, GCC 14.2, CMake 3.30.2, and esptool 4.11 without project-source compiler warnings. The build used 63,008 bytes static RAM (19.2%) and 1,577,409 bytes application flash (86.0%), below the 98,304/1,650,000-byte CI budgets. Versus AD2IOT-1118 this is +268 bytes RAM and +33,488 bytes linked application flash, leaving 72,591 bytes of the conservative application-flash budget.
 - `pio run -e esp32-poe-iso -t buildfs`: pass.
-- Firmware image inspection: pass; `firmware.bin` contains `AD2IOT-1118` and the `Aug 11 2026 20:24:12` build timestamp; the validated image is 1,549,664 bytes.
+- Firmware image inspection: pass; `firmware.bin` contains `AD2IOT-1119` and the `Aug 11 2026 21:41:15` build timestamp; the validated image is 1,577,808 bytes.
 - `tools/ci/package_release.py` smoke test: pass; required binaries, SD-card bundle, and checksum manifest verified.
 - `actionlint` 1.7.12 against both workflow files: pass; the downloaded binary matched its published SHA-256 manifest.
 - GitHub-hosted execution: the Python 3.12/setuptools compatibility hotfix passed in [workflow run 31519749844](https://github.com/delphimon/AlarmDecoder-IoT/actions/runs/31519749844). The tagged `AD2IOT-1112` release build, tests, SPIFFS image, package, and Actions artifact passed in [workflow run 31527943625](https://github.com/delphimon/AlarmDecoder-IoT/actions/runs/31527943625). Its initial release-asset step exposed missing repository context in `gh release upload`; commit `9d01f02` supplies `--repo`, adds tag/version validation, and passed the subsequent [master build](https://github.com/delphimon/AlarmDecoder-IoT/actions/runs/31529380757). The verified 41-file Actions artifact was attached to the release and its public download hash was rechecked.
 - Latest GitHub-hosted execution: `AD2IOT-1118` commit `6edf832` passed all validation, 34 host tests, clean firmware/SPIFFS builds, identity/size budgets, and packaging in [workflow run 31560603410](https://github.com/delphimon/AlarmDecoder-IoT/actions/runs/31560603410), producing the non-expired `AD2IOT-1118-Release-Package` artifact.
-- Hardware update: `versionusd` validated the SD image identity, project, build timestamp, and size before `upgradeusd`; the device returned on `AD2IOT-1118` and removed `firmware.bin` after success. A subsequent valid 1117 image was blocked as a downgrade and a valid 1118 image was blocked as a same-version reinstall in both CLI and HTTPS API; neither exposed an enabled upgrade action, and the test file was removed.
-- Hardware HTTPS/WSS: public Let's Encrypt certificate and TLS 1.2 accepted; authenticated WSS opened in 611 ms and returned sync/history JSON plus pong with no protocol errors. REST Basic/cookie authentication returned 200 and a fresh anonymous connection received a complete 401 response.
+- Hardware update: the AD2IOT-1118 device's `versionusd` validated AD2IOT-1119's identity, project, build timestamp, and 1,577,808-byte size before `upgradeusd`; the device returned on AD2IOT-1119 and removed `firmware.bin` after success.
+- Hardware HTTPS/WSS: the public Let's Encrypt certificate was accepted; authenticated WSS opened in 1,533 ms and returned JSON plus pong with no protocol error. Nine full configuration reads completed with 1,108 ms median/2,583 ms p95, and 25 smaller API calls completed with 62.5 ms median/94.0 ms p95.
 - Hardware configuration: active, SPIFFS, and SD views returned 20,439–21,249 byte redacted responses. The apparent SPIFFS secret match was confirmed to be the configured word appearing only in documentation/key text; its actual assignment was `[redacted]` and no configured assigned value leaked.
-- Hardware workload: the dependency-free smoke tool kept authenticated WSS open while nine configuration reads completed with 1,186 ms median/1,740 ms p95 and 25 smaller API calls completed with 60.7 ms median/73.9 ms p95. There were zero errors, uptime advanced, post-WSS free heap increased by 4,804 bytes, minimum free heap was 21,828 bytes, and no panic/OOM/watchdog entry appeared in the 64-line network-CLI history.
+- Hardware workload: the dependency-free smoke tool kept authenticated WSS open across all 34 REST requests with zero failures; post-WSS free heap changed by -440 bytes and minimum free heap was 19,112 bytes. A separate 64-line network-CLI scan found no panic, watchdog, Guru Meditation, OOM, assertion, or abort signature.

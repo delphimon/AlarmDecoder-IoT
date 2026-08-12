@@ -228,9 +228,9 @@ void hal_change_led_state(int state)
 void hal_led_blink(int switch_state, int delay, int count)
 {
     for (int i = 0; i < count; i++) {
-        vTaskDelay(delay / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(delay));
         hal_change_led_state(SWITCH_OFF);
-        vTaskDelay(delay / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(delay));
         hal_change_led_state(SWITCH_ON);
     }
 }
@@ -679,8 +679,8 @@ void hal_init_eth(std::string &args)
     phy_config.reset_timeout_ms = 100;
 
 #if CONFIG_AD2IOT_USE_INTERNAL_ETHERNET
-    emac_config.smi_mdc_gpio_num = (gpio_num_t)CONFIG_AD2IOT_ETH_MDC_GPIO;
-    emac_config.smi_mdio_gpio_num = (gpio_num_t)CONFIG_AD2IOT_ETH_MDIO_GPIO;
+    emac_config.smi_gpio.mdc_num = (gpio_num_t)CONFIG_AD2IOT_ETH_MDC_GPIO;
+    emac_config.smi_gpio.mdio_num = (gpio_num_t)CONFIG_AD2IOT_ETH_MDIO_GPIO;
     esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&emac_config, &mac_config);
 #ifdef CONFIG_AD2IOT_ETH_PHY_LAN8720
     esp_eth_phy_t *phy = esp_eth_phy_new_lan87xx(&phy_config);
@@ -790,18 +790,16 @@ void hal_host_uart_init()
 {
 
     // Configure parameters of an UART driver,
-    uart_config_t* uart_config = (uart_config_t*)calloc(sizeof(uart_config_t), 1);
+    uart_config_t uart_config = {};
 
-    uart_config->baud_rate = 115200;
-    uart_config->data_bits = UART_DATA_8_BITS;
-    uart_config->parity    = UART_PARITY_DISABLE;
-    uart_config->stop_bits = UART_STOP_BITS_1;
-    uart_config->flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    uart_config.baud_rate = 115200;
+    uart_config.data_bits = UART_DATA_8_BITS;
+    uart_config.parity    = UART_PARITY_DISABLE;
+    uart_config.stop_bits = UART_STOP_BITS_1;
+    uart_config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
 
-    uart_param_config(UART_NUM_0, uart_config);
+    uart_param_config(UART_NUM_0, &uart_config);
     uart_driver_install(UART_NUM_0, MAX_UART_CMD_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LOWMED);
-
-    free(uart_config);
 }
 
 /** Event handler for IP_EVENT_ETH_GOT_IP */
@@ -919,7 +917,7 @@ void hal_ad2_reset()
     gpio_config(&io_conf);
 
     gpio_set_level(GPIO_AD2_RESET, 0);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     gpio_set_level(GPIO_AD2_RESET, 1);
 #endif
 }

@@ -312,7 +312,7 @@ static void _cli_util_wait_for_user_input(unsigned int timeout_ms)
             break;
         }
         taskEXIT_CRITICAL(&spinlock);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     taskENTER_CRITICAL(&spinlock);
@@ -330,7 +330,7 @@ static void _cli_util_wait_for_user_input(unsigned int timeout_ms)
                 break;
             }
             taskEXIT_CRITICAL(&spinlock);
-            vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }
@@ -368,11 +368,11 @@ static void uart_cli_task(void *pvParameters)
 
         // Read data from the UART
         memset(rx_buffer, 0, AD2_UART_RX_BUFF_SIZE);
-        int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
+        int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, pdMS_TO_TICKS(5));
 
         if (len < 0) {
             ESP_LOGE(TAG, "%s: uart cli read error.", __func__);
-            vTaskDelay(100 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
@@ -508,7 +508,7 @@ static void uart_cli_task(void *pvParameters)
             ad2_give_host_console((void *)xTaskGetCurrentTaskHandle());
         }
 
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(10));
 #if defined(AD2_STACK_REPORT)
 #define EXTRA_INFO_EVERY 1000
         static int extra_info = EXTRA_INFO_EVERY;

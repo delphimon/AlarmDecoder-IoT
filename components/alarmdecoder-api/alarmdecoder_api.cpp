@@ -1025,9 +1025,6 @@ bool AlarmDecoderParser::put(uint8_t *buff, int8_t len)
                             bool ALARM_BELL = is_bit_set(ALARM_BYTE, msg.c_str());
                             bool ALARM_STICKY = is_bit_set(ALARMSTICKY_BYTE, msg.c_str());
                             bool ZONE_BYPASSED = is_bit_set(BYPASS_BYTE, msg.c_str());
-                            uint8_t extra_sys_1 = (uint8_t) strtol(msg.substr(ADEMCO_EXTRA_SYSB1, 2).c_str(), 0, 16);
-                            uint8_t extra_sys_2 = (uint8_t) strtol(msg.substr(ADEMCO_EXTRA_SYSB2, 2).c_str(), 0, 16);
-                            uint8_t extra_sys_3 = (uint8_t) strtol(msg.substr(ADEMCO_EXTRA_SYSB3, 2).c_str(), 0, 16);
                             uint8_t extra_sys_4 = (uint8_t) strtol(msg.substr(ADEMCO_EXTRA_SYSB4, 2).c_str(), 0, 16);
 
                             // virtual bit restore current state by default.

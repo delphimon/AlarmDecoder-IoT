@@ -270,7 +270,6 @@ void mqtt_send_partition_config(AD2PartitionState *s)
  */
 void mqtt_send_fw_version(const char *available_version)
 {
-    int msg_id;
     if (mqtt_client != nullptr) {
         std::string sTopic = mqttclient_TPREFIX + MQTT_TOPIC_PREFIX "/";
         sTopic+=mqttclient_UUID;
@@ -284,13 +283,16 @@ void mqtt_send_fw_version(const char *available_version)
         cJSON_Minify(state);
 
         // Non blocking. We must not block AlarmDecoderParser
-        msg_id = esp_mqtt_client_enqueue(mqtt_client,
-                                         sTopic.c_str(),
-                                         state,
-                                         0,
-                                         MQTT_DEF_QOS,
-                                         MQTT_DEF_RETAIN,
-                                         MQTT_DEF_STORE);
+        int msg_id = esp_mqtt_client_enqueue(mqtt_client,
+                                             sTopic.c_str(),
+                                             state,
+                                             0,
+                                             MQTT_DEF_QOS,
+                                             MQTT_DEF_RETAIN,
+                                             MQTT_DEF_STORE);
+        if (msg_id < 0) {
+            ESP_LOGE(TAG, "Unable to enqueue firmware version");
+        }
 
         cJSON_free(state);
         cJSON_Delete(root);
@@ -512,8 +514,6 @@ static void ad2_mqtt_event_handler(void *handler_args, esp_event_base_t base, in
 
     esp_mqtt_event_handle_t event = (esp_mqtt_event_t*)event_data;
     esp_mqtt_client_handle_t client = event->client;
-    int msg_id;
-
     // your_context_t *context = event->context;
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
@@ -677,7 +677,6 @@ static void ad2_mqtt_event_handler(void *handler_args, esp_event_base_t base, in
  */
 void mqtt_on_lrr(std::string *msg, AD2PartitionState *s, void *arg)
 {
-    int msg_id;
     if (mqtt_client != nullptr) {
         std::string sTopic = mqttclient_TPREFIX + MQTT_TOPIC_PREFIX "/";
         sTopic+=mqttclient_UUID;
@@ -690,13 +689,16 @@ void mqtt_on_lrr(std::string *msg, AD2PartitionState *s, void *arg)
         cJSON_Minify(state);
 
         // Non blocking. We must not block AlarmDecoderParser
-        msg_id = esp_mqtt_client_enqueue(mqtt_client,
-                                         sTopic.c_str(),
-                                         state,
-                                         0,
-                                         MQTT_DEF_QOS,
-                                         MQTT_DEF_RETAIN,
-                                         MQTT_DEF_STORE);
+        int msg_id = esp_mqtt_client_enqueue(mqtt_client,
+                                             sTopic.c_str(),
+                                             state,
+                                             0,
+                                             MQTT_DEF_QOS,
+                                             MQTT_DEF_RETAIN,
+                                             MQTT_DEF_STORE);
+        if (msg_id < 0) {
+            ESP_LOGE(TAG, "Unable to enqueue LRR event");
+        }
 
         cJSON_free(state);
         cJSON_Delete(root);
@@ -727,7 +729,6 @@ void on_new_firmware_cb(std::string *msg, AD2PartitionState *s, void *arg)
  */
 void mqtt_on_zone_change(std::string *msg, AD2PartitionState *s, void *arg)
 {
-    int msg_id;
     if (mqtt_client != nullptr && s) {
         std::string sTopic = mqttclient_TPREFIX + MQTT_TOPIC_PREFIX "/";
         sTopic+=mqttclient_UUID;
@@ -751,13 +752,16 @@ void mqtt_on_zone_change(std::string *msg, AD2PartitionState *s, void *arg)
         cJSON_Minify(state);
 
         // Non blocking. We must not block AlarmDecoderParser
-        msg_id = esp_mqtt_client_enqueue(mqtt_client,
-                                         sTopic.c_str(),
-                                         state,
-                                         0,
-                                         MQTT_DEF_QOS,
-                                         MQTT_DEF_RETAIN,
-                                         MQTT_DEF_STORE);
+        int msg_id = esp_mqtt_client_enqueue(mqtt_client,
+                                             sTopic.c_str(),
+                                             state,
+                                             0,
+                                             MQTT_DEF_QOS,
+                                             MQTT_DEF_RETAIN,
+                                             MQTT_DEF_STORE);
+        if (msg_id < 0) {
+            ESP_LOGE(TAG, "Unable to enqueue zone event");
+        }
         cJSON_free(state);
         cJSON_Delete(root);
     }
@@ -1139,7 +1143,7 @@ void mqtt_startup_task(void *pvParameters)
 #endif
     while (1) {
         if (!hal_get_netif_started()) {
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
         } else {
             break;
         }

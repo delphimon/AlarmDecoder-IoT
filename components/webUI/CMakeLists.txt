@@ -10,4 +10,3 @@ idf_component_register(SRCS "webUI.cpp" "TinyTemplateEngine.cpp" "TinyTemplateEn
                     REQUIRES idf::spiffs
                     REQUIRES idf::usdupdate
                     INCLUDE_DIRS . ../../main/)
-project(webUI)

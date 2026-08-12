@@ -6,5 +6,4 @@ idf_component_register(SRCS "ota_util.cpp"
                     REQUIRES idf::esp_https_ota
                     REQUIRES idf::json
                     INCLUDE_DIRS . ../../main/
-                    EMBED_TXTFILES firmware_signature_public_key.pem ${EXTRA_EMBED})
-project(otaupdate)
+                    EMBED_TXTFILES firmware_signature_public_key.pem)

@@ -2098,14 +2098,14 @@ static void _http_sendQ_consumer_task(void *pvParameters)
 
                 // sleep our rate limit. Not exactly the rate not factoring in
                 // client connection time but close enough for now.
-                vTaskDelay(HTTP_SEND_RATE_LIMIT / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(HTTP_SEND_RATE_LIMIT));
             } else {
                 // sleep for a bit then check the queue again.
-                vTaskDelay(100 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(100));
             }
         }
         // sleep for a bit then check the queue again.
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(100));
     }
     ESP_LOGW(TAG, "http sendQ ending. HTTP request delivery halted.");
     vTaskDelete(NULL);

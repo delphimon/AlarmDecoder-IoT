@@ -839,7 +839,7 @@ void ser2sockd_server_task(void *pvParameters)
 #endif
     while (!ser2sockd_shutting_down) {
         if (!hal_get_netif_started()) {
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
         } else {
             break;
         }
@@ -940,7 +940,7 @@ void ser2sockd_server_task(void *pvParameters)
                 next go round will be idle too
                 */
                 if (!did_work) {
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(100));
                 }
                 /* if network goes away then we are done */
                 if (!hal_get_network_connected()) {
@@ -960,7 +960,7 @@ CLEAN_UP:
                 _cleanup_fd(n);
             }
         }
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     vTaskDelete(NULL);
 }

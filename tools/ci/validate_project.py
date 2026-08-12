@@ -64,8 +64,8 @@ def main() -> int:
             errors += 1
 
     ini = (ROOT / "platformio.ini").read_text(encoding="utf-8")
-    if "platform = espressif32@=" not in ini:
-        fail("platformio.ini must pin the Espressif32 platform")
+    if "platform = espressif32@=6.13.0" not in ini:
+        fail("platformio.ini must pin Espressif32 6.13.0")
         errors += 1
 
     if errors:
@@ -76,4 +76,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

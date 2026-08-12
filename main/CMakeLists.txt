@@ -8,7 +8,6 @@ idf_component_register(SRCS "ad2_utils.cpp" "alarmdecoder_main.cpp"
                     REQUIRES idf::spi_flash
                     REQUIRES idf::json
                     REQUIRES idf::fatfs
-		    REQUIRES idf::stsdk
                     REQUIRES idf::esp_http_client
                     REQUIRES idf::spiffs
                     REQUIRES idf::alarmdecoder-api
@@ -23,17 +22,13 @@ idf_component_register(SRCS "ad2_utils.cpp" "alarmdecoder_main.cpp"
                     REQUIRES idf::ftpd
                     )
 
-set(STDK_IOT_CORE_USE_DEFINED_CONFIG "y")
-
-
-# Fetch SimpleIni lib and as as include path.
-#  Todo: Only if not already downloaded.
-include(FetchContent) # once in the project to include the module
-FetchContent_Declare(simpleini GIT_REPOSITORY https://github.com/brofield/simpleini.git)
+# SimpleIni 4.26 is header-only and publishes a CMake interface target. Pin the
+# exact release commit so native ESP-IDF and PlatformIO builds use one source.
+include(FetchContent)
+FetchContent_Declare(simpleini
+        GIT_REPOSITORY https://github.com/brofield/simpleini.git
+        GIT_TAG 877f7357d1fa4232f1f3352e5028f99899210b27
+        GIT_SHALLOW FALSE
+)
 FetchContent_MakeAvailable(simpleini)
-include_directories(${simpleini_SOURCE_DIR})
-
-if(CONFIG_STDK_IOT_CORE)
-        add_subdirectory($ENV{STDK_CORE_PATH} iotcore)
-        target_link_libraries(${COMPONENT_LIB} PUBLIC iotcore)
-endif()
+target_link_libraries(${COMPONENT_LIB} PUBLIC SimpleIni::SimpleIni)

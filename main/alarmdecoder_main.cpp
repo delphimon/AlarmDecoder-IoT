@@ -651,7 +651,7 @@ static void _cli_cmd_top_event(const char *string)
             }
         }
         // Check if host sent any data exit command if true.
-        int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
+        int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, pdMS_TO_TICKS(5));
         if (len == -1) {
             // An error happend. Sleep for a bit and try again?
             ESP_LOGE(TAG, "Error reading for UART aborting task.");
@@ -690,7 +690,7 @@ static void ad2_app_main_task(void *pvParameters)
 #if CONFIG_AD2IOT_TOP
         _update_top_task_stats();
 #endif
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     vTaskDelete(NULL);
@@ -726,16 +726,16 @@ static void ad2uart_client_task(void *pvParameters)
             memset(rx_buffer, 0, AD2_UART_RX_BUFF_SIZE);
 
             // Read data from the UART
-            int len = uart_read_bytes((uart_port_t)g_ad2_client_handle, rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
+        int len = uart_read_bytes((uart_port_t)g_ad2_client_handle, rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, pdMS_TO_TICKS(5));
             if (len == -1) {
                 // An error happend. Sleep for a bit and try again?
-                vTaskDelay(5000 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(5000));
             }
             if (len>0) {
                 AD2Parse.put(rx_buffer, len);
             }
         }
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(10));
     }
     vTaskDelete(NULL);
 }
@@ -786,7 +786,7 @@ bool _ser2sock_client_connect(const char *args)
     if (port == -1) {
         ESP_LOGE(TAG, "Error parsing host:port from settings '%s'. Sleeping for 30 seconds.", buf.c_str());
         // sleep a long time maybe the config will be updated live.
-        vTaskDelay(30000 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(30000));
         return false;
     }
 
@@ -884,7 +884,7 @@ static void ser2sock_client_task(void *pvParameters)
                     if (!hal_get_network_connected()) {
                         break;
                     }
-                    vTaskDelay(10 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(10));
 #if defined(AD2_STACK_REPORT)
 #define S2S_EXTRA_INFO_EVERY 1000
                     static int extra_info = S2S_EXTRA_INFO_EVERY;
@@ -905,9 +905,9 @@ static void ser2sock_client_task(void *pvParameters)
 #if defined(AD2_STACK_REPORT)
             ESP_LOGI(TAG, "ser2sock_client stack free %d", uxTaskGetStackHighWaterMark(NULL));
 #endif
-            vTaskDelay(3000 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(3000));
         }
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(10));
     }
     vTaskDelete(NULL);
 }
@@ -936,19 +936,19 @@ void init_ad2_uart_client(const char *args)
     int rx_pin = atoi(out[1].c_str());
 
     // Configure parameters of an UART driver,
-    uart_config_t* uart_config = (uart_config_t*)calloc(sizeof(uart_config_t), 1);
+    uart_config_t uart_config = {};
 
-    uart_config->baud_rate = 115200;
-    uart_config->data_bits = UART_DATA_8_BITS;
-    uart_config->parity    = UART_PARITY_DISABLE;
-    uart_config->stop_bits = UART_STOP_BITS_1;
-    uart_config->flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-    uart_config->rx_flow_ctrl_thresh = 1;
+    uart_config.baud_rate = 115200;
+    uart_config.data_bits = UART_DATA_8_BITS;
+    uart_config.parity    = UART_PARITY_DISABLE;
+    uart_config.stop_bits = UART_STOP_BITS_1;
+    uart_config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    uart_config.rx_flow_ctrl_thresh = 1;
 
     // esp_restart causes issues with UART2 don't set config if reset switch pushed.
     // https://github.com/espressif/esp-idf/issues/5274
     if (esp_reset_reason() != ESP_RST_SW) {
-        uart_param_config((uart_port_t)g_ad2_client_handle, uart_config);
+        uart_param_config((uart_port_t)g_ad2_client_handle, &uart_config);
     }
 
     uart_set_pin((uart_port_t)g_ad2_client_handle,
@@ -958,8 +958,6 @@ void init_ad2_uart_client(const char *args)
                  UART_PIN_NO_CHANGE);// CTS
 
     uart_driver_install((uart_port_t)g_ad2_client_handle, MAX_UART_CMD_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LOWMED);
-    free(uart_config);
-
     // Main AlarmDecoderParser:
     // 20210815SM: 1220 bytes stack free.
     // 20211201SM: expand to 8k. Main task for everything.
@@ -1287,7 +1285,7 @@ extern "C" {
 #endif
 
         // Sleep for another 5 seconds. Hopefully wifi is up before we continue connecting the AD2*.
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(5000));
 
         // Start main AlarmDecoder IoT app task
         xTaskCreate(ad2_app_main_task, "AD2 main", 1024*4, NULL, tskIDLE_PRIORITY+1, NULL);

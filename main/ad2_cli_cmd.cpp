@@ -273,7 +273,7 @@ static void _cli_cmd_ad2term_event(const char *string)
     taskEXIT_CRITICAL(&spinlock);
 
     // let other tasks have time to stop.
-    vTaskDelay(250 / portTICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(250));
 
     // if argument provided then assert reset pin on AD2pHAT board on GPIO
     std::string arg;
@@ -293,7 +293,7 @@ static void _cli_cmd_ad2term_event(const char *string)
         // UART source to host
         if (g_ad2_mode == 'C') {
             // Read data from the UART
-            int len = uart_read_bytes((uart_port_t)g_ad2_client_handle, rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
+            int len = uart_read_bytes((uart_port_t)g_ad2_client_handle, rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, pdMS_TO_TICKS(5));
             if (len == -1) {
                 // An error happend. Sleep for a bit and try again?
                 ESP_LOGE(TAG, "Error reading for UART aborting task.");
@@ -334,7 +334,7 @@ static void _cli_cmd_ad2term_event(const char *string)
         }
 
         // Host to AD2*
-        int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, 5 / portTICK_PERIOD_MS);
+            int len = cli_read_bytes(rx_buffer, AD2_UART_RX_BUFF_SIZE - 1, pdMS_TO_TICKS(5));
         if (len == -1) {
             // An error happend. Sleep for a bit and try again?
             ESP_LOGE(TAG, "Error reading for UART aborting task.");
@@ -366,7 +366,7 @@ static void _cli_cmd_ad2term_event(const char *string)
             ad2_send(temp);
         }
 
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     ad2_printf_host(false, "Resuming command line interface threads.\r\n");

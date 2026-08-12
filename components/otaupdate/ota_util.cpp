@@ -22,13 +22,13 @@
  *
  */
 
- static const char *TAG = "AD2OTA";
-
  // AlarmDecoder std includes
 #include "alarmdecoder_main.h"
 
  // Disable via config
 #if CONFIG_AD2IOT_OTAUPDATE
+
+static const char *TAG = "AD2OTA";
 
  // FreeRTOS includes
 #include "freertos/FreeRTOS.h"
@@ -437,7 +437,7 @@ esp_err_t ota_https_update_device(const char *buildflags)
     mbedtls_sha256_context ctx;
     char *upgrade_data_buf = nullptr;
 
-    esp_http_client_config_t* config = (esp_http_client_config_t*)calloc(sizeof(esp_http_client_config_t), 1);
+    esp_http_client_config_t* config = (esp_http_client_config_t*)calloc(1, sizeof(esp_http_client_config_t));
     std::string fwfile = ad2_string_printf(CONFIG_FIRMWARE_UPGRADE_URL_FMT, buildflags);
     config->url = fwfile.c_str();
     config->timeout_ms = OTA_SOCKET_TIMEOUT;
@@ -613,7 +613,7 @@ esp_err_t ota_https_read_version_info(char **version_info, unsigned int *version
 {
     esp_err_t ret = ESP_FAIL;
 
-    esp_http_client_config_t* config = (esp_http_client_config_t*)calloc(sizeof(esp_http_client_config_t), 1);
+    esp_http_client_config_t* config = (esp_http_client_config_t*)calloc(1, sizeof(esp_http_client_config_t));
     config->url = CONFIG_FIRMWARE_VERSION_INFO_URL;
     config->timeout_ms = OTA_SOCKET_TIMEOUT;
     config->transport_type = HTTP_TRANSPORT_OVER_SSL;
@@ -725,7 +725,7 @@ static void ota_polling_task_func(void *arg)
         }
 #endif
 
-        vTaskDelay(delay / portTICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(delay));
 
         ESP_LOGI(TAG, "Starting check new version with current version '%s'-%s",
                  ad2_firmware_version(), FIRMWARE_BUILDFLAGS);
@@ -781,7 +781,7 @@ static void ota_polling_task_func(void *arg)
         /* Get polling period in days from server response and set it */
         unsigned int polling_day = ota_get_polling_period_day();
         unsigned int task_delay_sec = polling_day * 24 * 3600;
-        vTaskDelay(task_delay_sec * 1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(task_delay_sec * 1000));
     }
 }
 

@@ -1478,7 +1478,7 @@ void FTPD::processCommand()
 
             }
         }
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(100));
     } // End loop processing commands.
 
 #if defined(FTPD_DEBUG)
@@ -1874,7 +1874,7 @@ void ftp_daemon_task(void *pvParameters)
 #endif
     while (1) {
         if (!hal_get_netif_started()) {
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
         } else {
             break;
         }

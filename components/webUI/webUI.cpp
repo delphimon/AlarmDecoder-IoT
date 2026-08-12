@@ -1673,7 +1673,7 @@ void webui_server_task(void *pvParameters)
 #endif
     while (1) {
         if (!hal_get_netif_started()) {
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
         } else {
             break;
         }
@@ -1792,7 +1792,7 @@ void webui_server_task(void *pvParameters)
                 std::string certificate;
                 std::string private_key;
                 if (!webui_load_tls_material(certificate, private_key)) {
-                    vTaskDelay(10000 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(10000));
                     continue;
                 }
                 httpd_ssl_config_t tls_config = HTTPD_SSL_CONFIG_DEFAULT();
@@ -1838,7 +1838,7 @@ void webui_server_task(void *pvParameters)
                 // error long 10s sleep.
                 ESP_LOGW(TAG, "Error starting %s server [%s]",
                          webui_tls_enabled ? "HTTPS" : "HTTP", esp_err_to_name(err));
-                vTaskDelay(10000 / portTICK_PERIOD_MS);
+            vTaskDelay(pdMS_TO_TICKS(10000));
             }
         } else {
             // network down
@@ -1857,7 +1857,7 @@ void webui_server_task(void *pvParameters)
                 }
             }
             // short 1s sleep
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
     vTaskDelete(NULL);

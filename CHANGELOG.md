@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1119` for the ESP-IDF 5.5 toolchain migration build.
+- [x] TOOLCHAIN: upgrade PlatformIO Espressif32 from 6.4/ESP-IDF 5.1.1/GCC 12.2 to 6.13.0/ESP-IDF 5.5.3/GCC 14.2/esptool 4.11, remove the obsolete CI `pkg_resources`/setuptools shim, and regenerate the primary board configuration without changing its critical flash, TLS, coredump, socket, or scheduling policy.
+- [x] DEPENDENCIES: upgrade SimpleIni 4.19 to pinned 4.26 and `{fmt}` 8.0.1 to 12.2.0; use the canonical header-only SimpleIni CMake target and the current `{fmt}` format header.
+- [x] API/BUILD: replace deprecated ESP Ethernet SMI fields, remove heap allocation from UART configuration, use `pdMS_TO_TICKS`, raise the CMake baseline to 3.16, eliminate nested component projects/dead pre-IDF-4.1 branches, and keep deferred SmartThings configuration out of the primary build.
+- [x] RELIABILITY: report MQTT enqueue and notification request-body failures that were previously discarded, and clear GCC 14 project-source warnings found during the migration.
+- [x] TEST: pin the migrated framework/library versions in regression checks and verify a from-scratch firmware build stays within RAM and flash budgets.
+- [x] TEST/HARDWARE: install AD2IOT-1119 through the SD updater and verify Ethernet, public-certificate HTTPS, authenticated WSS, active/SPIFFS/SD configuration streaming, 34 browser-equivalent REST requests, a 19,112-byte heap low-water mark, and clean network-CLI logs with no panic/watchdog/OOM signatures.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1118` for the hardware-validated SD update policy build.
 - [x] SECURITY/USDUPDATE: require a strictly newer `AD2IOT-<number>` release after full image integrity checks; reject malformed identities, same-version reinstalls, and downgrades while reporting the policy state through CLI and Web UI diagnostics.
 - [x] BUILD: make CMake reconfigure when `version.txt` changes so incremental PlatformIO builds cannot retain a stale ESP application identity.
@@ -55,8 +62,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - [x] RELIABILITY: bound Wi-Fi SSID/password copies and make factory reset handle the higher-priority SD configuration safely.
 - [ ] RELIABILITY: centralize restart cleanup across network, storage, and integration services.
 - [ ] TEST: add functional parser and redaction tests plus hardware-in-loop authorization, HTTPS/WSS, update, and restart smoke coverage. Static path/action/session regression checks are now present.
-- [ ] TOOLCHAIN: migrate from PlatformIO Espressif32 6.4/ESP-IDF 5.1.1 to 6.13/ESP-IDF 5.5.3 in a dedicated compatibility change, then evaluate Espressif32 7/ESP-IDF 6 separately.
-- [ ] TOOLCHAIN: compatibility-test updates from SimpleIni 4.19 to 4.26 and `{fmt}` 8.0.1 to 12.2.0.
+- [x] TOOLCHAIN: migrate from PlatformIO Espressif32 6.4/ESP-IDF 5.1.1 to 6.13/ESP-IDF 5.5.3 in a dedicated compatibility change; ESP-IDF 6 remains a separate evaluation.
+- [x] TOOLCHAIN: compatibility-test updates from SimpleIni 4.19 to 4.26 and `{fmt}` 8.0.1 to 12.2.0.
 - [ ] STYLE: add a non-mutating format/style check after agreeing on a repository-wide baseline; the existing tree is not yet style-clean.
 
 ### Deferred

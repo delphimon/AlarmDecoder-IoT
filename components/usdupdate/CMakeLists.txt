@@ -7,4 +7,3 @@ idf_component_register(SRCS "usdupdate.cpp"
                     REQUIRES idf::json
                     REQUIRES idf::mbedtls
                     INCLUDE_DIRS . ../../main/)
-project(usdupdate)

@@ -33,7 +33,7 @@ static const char *TAG = "TWILIO";
 #include "alarmdecoder_main.h"
 
 // specific includes
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 //#define DEBUG_TWILIO
 
@@ -116,7 +116,6 @@ public:
  */
 static void _build_twilio_message_post(esp_http_client_handle_t client, tw_request_message *r)
 {
-    esp_err_t err;
     std::string auth_header;
 
     // get token for this notification slot from config.
@@ -144,7 +143,9 @@ static void _build_twilio_message_post(esp_http_client_handle_t client, tw_reque
               "&Body=" + ad2_urlencode(r->message);
 
     // does not copy data just a pointer so we have to maintain memory.
-    err = esp_http_client_set_post_field(client, r->post.c_str(), r->post.length());
+    if (esp_http_client_set_post_field(client, r->post.c_str(), r->post.length()) != ESP_OK) {
+        ESP_LOGE(TAG, "Unable to set Twilio message body");
+    }
 }
 
 /**
@@ -153,7 +154,6 @@ static void _build_twilio_message_post(esp_http_client_handle_t client, tw_reque
  */
 static void _build_twilio_call_post(esp_http_client_handle_t client, tw_request_message *r)
 {
-    esp_err_t err;
     std::string auth_header;
 
     // get sid for this notification slot from config.
@@ -193,7 +193,9 @@ static void _build_twilio_call_post(esp_http_client_handle_t client, tw_request_
               "&Twiml=" + ad2_urlencode(twiml);
 
     // does not copy data just a pointer so we have to maintain memory.
-    err = esp_http_client_set_post_field(client, r->post.c_str(), r->post.length());
+    if (esp_http_client_set_post_field(client, r->post.c_str(), r->post.length()) != ESP_OK) {
+        ESP_LOGE(TAG, "Unable to set Twilio call body");
+    }
 }
 
 /**
@@ -201,8 +203,6 @@ static void _build_twilio_call_post(esp_http_client_handle_t client, tw_request_
  */
 static void _build_sendgrid_post(esp_http_client_handle_t client, tw_request_message *r)
 {
-    esp_err_t err;
-
     // get sid for this notification slot from config.
     std::string tokenString;
     ad2_get_config_key_string(TWILIO_CONFIG_SECTION, TWILIO_TOKEN_SUBCMD, tokenString, r->notify_slot);
@@ -261,7 +261,9 @@ static void _build_sendgrid_post(esp_http_client_handle_t client, tw_request_mes
     r->post = json;
 
     // does not copy data just a pointer so we have to maintain memory.
-    err = esp_http_client_set_post_field(client, r->post.c_str(), r->post.length());
+    if (esp_http_client_set_post_field(client, r->post.c_str(), r->post.length()) != ESP_OK) {
+        ESP_LOGE(TAG, "Unable to set SendGrid message body");
+    }
 
     // set content type to json
     esp_http_client_set_header(client, "Content-Type", "application/json; charset=utf-8");
