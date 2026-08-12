@@ -136,7 +136,7 @@ Optional SD logging survives reboot and is asynchronous/rotating, but adds card 
 The workflows were modernized in `AD2IOT-1111` and made clean-runner compatible in `AD2IOT-1112`:
 
 - `.github/workflows/build.yml` now runs on pull requests as well as pushes/manual calls and can be invoked as a reusable workflow.
-- PlatformIO Core is pinned to 6.1.19 and Python to 3.12. The ESP-IDF 5.5 migration removed the former `pkg_resources`/setuptools compatibility shim. GitHub Actions use explicit release versions rather than floating old majors.
+- PlatformIO Core is pinned to 6.1.19 and Python to 3.12. The ESP-IDF 5.5 migration removed the former `pkg_resources`/setuptools compatibility shim. `IntelHex` 2.3.0 is pinned and import-checked because PlatformIO's esptool 4.11 package can otherwise omit that runtime on a clean runner. PlatformIO caches are versioned by complete toolchain input and no longer restore broadly across incompatible package sets. GitHub Actions use explicit release versions rather than floating old majors.
 - Least-privilege permissions, concurrency control, timeouts, PlatformIO package caching, version/changelog/web validation, host regression tests, and JavaScript syntax checking are enforced.
 - The build log is checked against explicit 98,304-byte static-RAM and 1,650,000-byte application-flash budgets before packaging.
 - The ESP application descriptor is parsed after compilation, preventing a stale binary with an embedded version that differs from `version.txt` from reaching a package or release.
@@ -157,7 +157,7 @@ Remaining CI opportunities, in priority order:
 
 | Component | Repository / workflow | Current upstream reviewed | Assessment and action |
 |---|---:|---:|---|
-| PlatformIO Core | 6.1.19 | 6.1.19 | Now pinned and current. |
+| PlatformIO Core | 6.1.19 | 6.1.19 | Now pinned and current; CI also pins the required IntelHex 2.3.0 esptool runtime. |
 | Python in CI | 3.12 | Newer Python versions are available | Supported and reproducible; no framework-specific setuptools shim remains. |
 | PlatformIO Espressif32 | 6.13.0 | 6.13.0 (ESP-IDF 5.5.3) and 7.0.x (ESP-IDF 6.0) | Upgraded. Treat 7.x/IDF 6 as a separate breaking migration. |
 | ESP-IDF | 5.5.3 | 5.5.x supported; 6.0.x current major | Upgraded to the current PlatformIO 6.x line; generated configuration and hardware behavior require regression validation before IDF 6. |

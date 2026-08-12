@@ -49,11 +49,16 @@ class ToolchainTests(unittest.TestCase):
         self.assertNotIn("STDK_CORE_PATH", main_cmake)
         self.assertNotIn("idf::stsdk", main_cmake)
 
-    def test_ci_has_no_obsolete_setuptools_compatibility_shim(self) -> None:
+    def test_ci_pins_current_build_runtime_dependencies(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
 
         self.assertNotIn("SETUPTOOLS_VERSION", workflow)
         self.assertNotIn("pkg_resources", workflow)
+        self.assertIn("PLATFORMIO_CORE_VERSION: 6.1.19", workflow)
+        self.assertIn("INTELHEX_VERSION: 2.3.0", workflow)
+        self.assertIn('"intelhex==${INTELHEX_VERSION}"', workflow)
+        self.assertIn("pio-v2-", workflow)
+        self.assertNotIn("restore-keys:", workflow)
         self.assertIn("'main/CMakeLists.txt'", workflow)
 
 
