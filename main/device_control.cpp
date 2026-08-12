@@ -697,6 +697,12 @@ void hal_init_eth(std::string &args)
 #if CONFIG_AD2IOT_USE_INTERNAL_ETHERNET
     emac_config.smi_gpio.mdc_num = (gpio_num_t)CONFIG_AD2IOT_ETH_MDC_GPIO;
     emac_config.smi_gpio.mdio_num = (gpio_num_t)CONFIG_AD2IOT_ETH_MDIO_GPIO;
+#if CONFIG_AD2IOT_ETH_RMII_CLK_OUTPUT
+    emac_config.clock_config.rmii.clock_mode = EMAC_CLK_OUT;
+#else
+    emac_config.clock_config.rmii.clock_mode = EMAC_CLK_EXT_IN;
+#endif
+    emac_config.clock_config.rmii.clock_gpio = CONFIG_AD2IOT_ETH_RMII_CLK_GPIO;
     esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&emac_config, &mac_config);
 #ifdef CONFIG_AD2IOT_ETH_PHY_LAN8720
     esp_eth_phy_t *phy = esp_eth_phy_new_generic(&phy_config);
@@ -706,7 +712,17 @@ void hal_init_eth(std::string &args)
     /* Configure the hardware */
     esp_eth_config_t config = ETH_DEFAULT_CONFIG(mac, phy);
     esp_eth_handle_t eth_handle = NULL;
-    ESP_ERROR_CHECK(esp_eth_driver_install(&config, &eth_handle));
+    const esp_err_t install_err = esp_eth_driver_install(&config, &eth_handle);
+    if (install_err != ESP_OK) {
+        ESP_LOGE(TAG, "Ethernet driver installation failed: %s", esp_err_to_name(install_err));
+        if (mac) {
+            mac->del(mac);
+        }
+        if (phy) {
+            phy->del(phy);
+        }
+        return;
+    }
     esp_netif_attach(_netif, esp_eth_new_netif_glue(eth_handle));
 
     // test DHCP or Static configuration

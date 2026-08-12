@@ -59,6 +59,18 @@ class ToolchainTests(unittest.TestCase):
             with self.subTest(api=removed):
                 self.assertNotIn(removed, source)
 
+    def test_primary_board_preserves_rmii_clock_output(self) -> None:
+        defaults = (ROOT / "sdkconfig.defaults").read_text(encoding="utf-8")
+        kconfig = (ROOT / "main" / "Kconfig.projbuild").read_text(encoding="utf-8")
+        device_control = (ROOT / "main" / "device_control.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("CONFIG_AD2IOT_ETH_RMII_CLK_OUTPUT=y", defaults)
+        self.assertIn("CONFIG_AD2IOT_ETH_RMII_CLK_GPIO=17", defaults)
+        self.assertIn("config AD2IOT_ETH_RMII_CLK_OUTPUT", kconfig)
+        self.assertIn("emac_config.clock_config.rmii.clock_mode = EMAC_CLK_OUT", device_control)
+        self.assertIn("emac_config.clock_config.rmii.clock_gpio = CONFIG_AD2IOT_ETH_RMII_CLK_GPIO", device_control)
+        self.assertNotIn("ESP_ERROR_CHECK(esp_eth_driver_install", device_control)
+
     def test_primary_components_do_not_create_nested_projects(self) -> None:
         component_root = ROOT / "components"
         for cmake_path in component_root.glob("*/CMakeLists.txt"):

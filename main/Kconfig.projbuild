@@ -84,6 +84,29 @@ if AD2IOT_USE_ETHERNET
             default 18
             help
                 Set the GPIO number used by SMI MDIO.
+
+        choice AD2IOT_ETH_RMII_CLOCK_MODE
+            prompt "RMII reference clock mode"
+            default AD2IOT_ETH_RMII_CLK_OUTPUT
+            help
+                Select whether the ESP32 receives an external 50 MHz RMII
+                reference clock or generates one for the PHY.
+
+            config AD2IOT_ETH_RMII_CLK_INPUT
+                bool "External clock input"
+
+            config AD2IOT_ETH_RMII_CLK_OUTPUT
+                bool "ESP32 clock output"
+        endchoice
+
+        config AD2IOT_ETH_RMII_CLK_GPIO
+            int "RMII reference clock GPIO number"
+            range 0 33
+            default 0 if AD2IOT_ETH_RMII_CLK_INPUT
+            default 17 if AD2IOT_ETH_RMII_CLK_OUTPUT
+            help
+                Set the RMII reference clock GPIO. The OLIMEX ESP32-PoE-ISO
+                uses ESP32 clock output on GPIO 17.
     endif # AD2IOT_USE_INTERNAL_ETHERNET
 
     if AD2IOT_USE_DM9051

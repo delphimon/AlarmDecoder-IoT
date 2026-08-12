@@ -4,13 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1123` for the hardware-discovered ESP-IDF 6 Ethernet correction.
+- [x] NETWORK/ETHERNET: restore the OLIMEX ESP32-PoE-ISO RMII 50 MHz clock output on GPIO 17 through project-owned configuration after ESP-IDF 6 removed the former framework Kconfig controls.
+- [x] RELIABILITY: report and clean up an EMAC installation failure instead of aborting into a coredump/reboot loop when Ethernet hardware initialization fails.
+- [x] TEST/HARDWARE: capture the apparent `AD2IOT-1122` OTA failure over USB serial, confirm that OTA had installed the image but boot entered an EMAC reset-timeout loop, directly flash `AD2IOT-1123`, and verify stable startup, mounted SPIFFS/SD, service tasks, 103,224-byte minimum free heap, and no new panic or reboot.
+- [ ] TEST/HARDWARE: restore an Ethernet link and run the full `AD2IOT-1123` HTTPS/WSS, configuration, network-CLI, MQTT, update, and heap-retention workload; EMAC starts successfully, but the directly attached device has not reported link or an IP address.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1122` for the ESP-IDF 6.0/GCC 15 migration build.
 - [x] TOOLCHAIN: upgrade PlatformIO Espressif32 6.13/ESP-IDF 5.5.3/GCC 14.2 to 7.0/ESP-IDF 6.0/GCC 15.2 and migrate active code away from APIs removed or deprecated by the new major framework.
 - [x] DEPENDENCIES: move cJSON 1.7.19~2 and ESP-MQTT 1.0.0 to exact ESP Component Registry pins with a committed dependency lock; retain exact SimpleIni 4.26 and `{fmt}` 12.2.0 sources.
 - [x] API/BUILD: replace the removed LAN87xx constructor with ESP-IDF's generic IEEE 802.3 PHY while preserving reset timing, migrate firmware hashes from removed public Mbed TLS SHA-256 contexts to checked PSA Crypto operations, handle the complete ESP-IDF 6 HTTP event set, use explicit POSIX stat declarations required by Picolibc, and remove the final project-owned legacy tick conversion.
 - [x] RELIABILITY/OTA: make the OTA SHA-256 helper report success after a valid digest instead of unconditionally failing, and propagate every PSA initialization/update/finalization error in OTA and SD image validation.
 - [x] CI/TEST: include the component manifest and dependency lock in PlatformIO cache invalidation, expand the host suite to 49 checks, and verify a clean firmware/SPIFFS build plus release-package smoke test on the new framework within the existing RAM and flash budgets.
-- [ ] TEST/HARDWARE: install `AD2IOT-1122` and rerun HTTPS/WSS, configuration, network-CLI, SD update, and heap-retention checks; the installed `AD2IOT-1121` baseline passed before the device endpoint became unreachable, and no firmware transfer or upgrade command was started.
+- [x] TEST/HARDWARE: confirm `AD2IOT-1122` was installed by OTA and reproduce its post-install EMAC reset-timeout boot loop over USB serial; this hardware finding is corrected by `AD2IOT-1123`.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1121` after final outbound trust-store hardening.
 - [x] SECURITY/TLS: remove the legacy self-signed AlarmDecoder OTA CA from the production trust store; retain ESP-IDF's public bundle by default and document private outbound roots as an explicit build-time opt-in.
 - [x] TEST/HARDWARE: install AD2IOT-1121 through the validated SD updater and verify public-certificate HTTPS, authenticated WSS, trusted time, all configuration sources, 52 browser-equivalent REST requests, network-CLI version/log diagnostics, and no critical runtime signatures.
