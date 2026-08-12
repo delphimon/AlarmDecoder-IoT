@@ -138,6 +138,9 @@
     byId("diagTlsSessions").textContent = network.web_protocol === "HTTPS" ?
       String(device.tls_sessions || 0) + " / " + String(device.tls_session_limit || 0) : "Not active";
     byId("diagNetworkState").textContent = network.connected ? "Connected" : "Disconnected";
+    byId("diagTrustedClock").textContent = network.time_synchronized && Number(network.unix_time) ?
+      new Date(Number(network.unix_time) * 1000).toLocaleString() + " · synchronized" :
+      "Not synchronized · outbound TLS unavailable";
     byId("diagAd2Source").textContent = device.alarmdecoder_source || "—";
     byId("diagUuid").textContent = device.uuid || "—";
     byId("diagConfigSource").textContent = storage.active_config_source || "—";

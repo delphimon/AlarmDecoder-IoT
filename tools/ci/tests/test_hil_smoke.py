@@ -48,6 +48,11 @@ password = exposed
         self.assertEqual(0x81, frame[0])
         self.assertTrue(frame[1] & 0x80)
 
+    def test_smoke_requires_device_reported_trusted_clock(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn('network.get("time_synchronized") is not True', source)
+        self.assertIn("clock_skew > 120", source)
+
 
 if __name__ == "__main__":
     unittest.main()

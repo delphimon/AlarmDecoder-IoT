@@ -417,6 +417,13 @@ def run(args: argparse.Namespace) -> None:
             raise RuntimeError(
                 f"installed firmware is {installed!r}; expected {expected_version!r}"
             )
+        network = first.get("network", {})
+        if network.get("time_synchronized") is not True:
+            raise RuntimeError("device clock is not synchronized; outbound TLS is unavailable")
+        unix_time = int(network.get("unix_time", 0))
+        clock_skew = abs(unix_time - int(time.time()))
+        if clock_skew > 120:
+            raise RuntimeError(f"device clock differs from the test host by {clock_skew} seconds")
         cookie_test = client.request("/api/system", authorize=False, use_cookie=True)
         if cookie_test.status != 200 or not client.cookie:
             raise RuntimeError("authenticated session cookie was not established or accepted")
@@ -491,6 +498,7 @@ def run(args: argparse.Namespace) -> None:
             )
 
         print(f"PASS firmware={expected_version} sources={','.join(sources)}")
+        print(f"TrustedClock synchronized=true skew_seconds={clock_skew}")
         print(
             "WSS "
             f"handshake_ms={websocket.handshake_ms:.1f} json={json_messages} pong={pongs}"

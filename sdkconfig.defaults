@@ -81,14 +81,15 @@ CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH=y
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
 CONFIG_HTTPD_WS_SUPPORT=y
-## TODO: Make better...
-CONFIG_ESP_TLS_INSECURE=y
-CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
+# Outbound TLS verifies the server chain and hostname. Do not enable the
+# ESP_TLS_INSECURE test-only options in production builds.
+# CONFIG_ESP_TLS_INSECURE is not set
 
 # SSL/TLS certificate bundles
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
-CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE=y
-CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="certs"
+# The public Mozilla-derived bundle is the production default. Private outbound
+# CA roots may be added deliberately by enabling the custom bundle in menuconfig.
+# CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE is not set
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y

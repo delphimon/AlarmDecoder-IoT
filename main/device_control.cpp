@@ -44,6 +44,9 @@ static const char *TAG = "HAL";
 #include "esp_eth_phy.h"
 #include "esp_flash.h"
 #include "esp_timer.h"
+#include "esp_netif_sntp.h"
+
+#include <ctime>
 
 // specific includes
 #if CONFIG_AD2IOT_OTAUPDATE
@@ -75,7 +78,14 @@ const int NET_STA_DISCONNECT_BIT	= BIT3;
 const int NET_AP_START_BIT 		= BIT4;
 const int NET_AP_STOP_BIT 		= BIT5;
 const int NET_NETIF_HAS_IP 		= BIT6;
+const int NET_TIME_SYNCED_BIT    = BIT7;
 const int NET_CONNECT_STATE_BITS = BIT1|BIT2|BIT3|BIT4|BIT5|BIT6;
+
+// Reject the reset-time epoch while allowing certificates issued before this
+// firmware was built. SNTP refreshes the clock hourly after the first sync.
+static constexpr time_t AD2_MIN_VALID_TIME = 1704067200; // 2024-01-01 UTC
+static bool _time_sync_initialized = false;
+static std::string _time_server;
 
 static bool switchAState = SWITCH_OFF;
 static bool switchBState = SWITCH_OFF;
@@ -373,6 +383,7 @@ bool hal_factory_reset(bool erase_sd_config)
     fprintf(f, "#AD2IoT config file\r\n");
     fprintf(f, "ad2source = C 4:36\r\n");
     fprintf(f, "netmode = E mode=d\r\n");
+    fprintf(f, "timeserver = " AD2_DEFAULT_TIME_SERVER "\r\n");
     fprintf(f, "logmode = I\r\n");
 #if CONFIG_AD2IOT_FTP_DAEMON
     fprintf(f, "[ftpd]\r\n");
@@ -800,6 +811,66 @@ void hal_host_uart_init()
 
     uart_param_config(UART_NUM_0, &uart_config);
     uart_driver_install(UART_NUM_0, MAX_UART_CMD_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LOWMED);
+}
+
+static void _time_sync_notification(struct timeval *tv)
+{
+    if (tv && tv->tv_sec >= AD2_MIN_VALID_TIME) {
+        xEventGroupSetBits(g_ad2_net_event_group, NET_TIME_SYNCED_BIT);
+        ad2_printf_host(true, "%s: System time synchronized using '%s'.", TAG,
+                        _time_server.c_str());
+    }
+}
+
+/**
+ * @brief Start ESP-IDF's managed SNTP service for outbound TLS validation.
+ */
+void hal_init_time_sync()
+{
+    if (_time_sync_initialized || !hal_get_netif_started()) {
+        return;
+    }
+
+    _time_server = AD2_DEFAULT_TIME_SERVER;
+    ad2_get_config_key_string(AD2MAIN_CONFIG_SECTION, TIMESERVER_CONFIG_KEY, _time_server);
+    ad2_trim(_time_server);
+    if (_time_server.empty()) {
+        _time_server = AD2_DEFAULT_TIME_SERVER;
+    }
+
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(_time_server.c_str());
+    config.sync_cb = _time_sync_notification;
+    const esp_err_t err = esp_netif_sntp_init(&config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Unable to initialize time synchronization: %s", esp_err_to_name(err));
+        return;
+    }
+    _time_sync_initialized = true;
+    ESP_LOGI(TAG, "Time synchronization started using '%s'", _time_server.c_str());
+}
+
+bool hal_time_is_synchronized()
+{
+    const time_t now = time(nullptr);
+    if (now >= AD2_MIN_VALID_TIME) {
+        xEventGroupSetBits(g_ad2_net_event_group, NET_TIME_SYNCED_BIT);
+        return true;
+    }
+    return false;
+}
+
+bool hal_wait_for_time_sync(uint32_t timeout_ms)
+{
+    if (hal_time_is_synchronized()) {
+        return true;
+    }
+    if (!_time_sync_initialized || !g_ad2_net_event_group) {
+        return false;
+    }
+    const EventBits_t bits = xEventGroupWaitBits(g_ad2_net_event_group,
+                             NET_TIME_SYNCED_BIT, pdFALSE, pdTRUE,
+                             pdMS_TO_TICKS(timeout_ms));
+    return (bits & NET_TIME_SYNCED_BIT) != 0 && hal_time_is_synchronized();
 }
 
 /** Event handler for IP_EVENT_ETH_GOT_IP */

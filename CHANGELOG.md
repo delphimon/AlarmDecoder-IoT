@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1121` after final outbound trust-store hardening.
+- [x] SECURITY/TLS: remove the legacy self-signed AlarmDecoder OTA CA from the production trust store; retain ESP-IDF's public bundle by default and document private outbound roots as an explicit build-time opt-in.
+- [x] TEST/HARDWARE: install AD2IOT-1121 through the validated SD updater and verify public-certificate HTTPS, authenticated WSS, trusted time, all configuration sources, 52 browser-equivalent REST requests, network-CLI version/log diagnostics, and no critical runtime signatures.
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1120` for authenticated outbound TLS and trusted-time validation.
+- [x] SECURITY/TLS: remove the global test-only skip-server-verification policy; attach ESP-IDF's certificate bundle to queued HTTPS, OTA HTTPS, MQTTS, and WSS clients while retaining hostname verification.
+- [x] NETWORK/TIME: initialize the ESP-IDF 5.5 managed SNTP service from a configurable `timeserver`, gate secure requests on trusted wall-clock readiness, and expose synchronization/current Unix time in Web UI diagnostics.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1119` for the ESP-IDF 5.5 toolchain migration build.
 - [x] TOOLCHAIN: upgrade PlatformIO Espressif32 from 6.4/ESP-IDF 5.1.1/GCC 12.2 to 6.13.0/ESP-IDF 5.5.3/GCC 14.2/esptool 4.11, remove the obsolete CI `pkg_resources`/setuptools shim, and regenerate the primary board configuration without changing its critical flash, TLS, coredump, socket, or scheduling policy.
 - [x] DEPENDENCIES: upgrade SimpleIni 4.19 to pinned 4.26 and `{fmt}` 8.0.1 to 12.2.0; use the canonical header-only SimpleIni CMake target and the current `{fmt}` format header.

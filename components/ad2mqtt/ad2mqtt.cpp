@@ -1189,6 +1189,18 @@ void mqtt_startup_task(void *pvParameters)
     mqtt_cfg.session.last_will.qos = 1;
     mqtt_cfg.session.last_will.retain = 1;
 
+    std::string secureBrokerURL = brokerURL;
+    ad2_lcase(secureBrokerURL);
+    const bool secureBroker = secureBrokerURL.rfind("mqtts://", 0) == 0 ||
+                              secureBrokerURL.rfind("wss://", 0) == 0;
+    if (secureBroker) {
+        mqtt_cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
+        mqtt_cfg.broker.verification.skip_cert_common_name_check = false;
+        if (!hal_wait_for_time_sync(30000)) {
+            ESP_LOGE(TAG, "Secure MQTT starting without synchronized time; certificate validation will fail closed until SNTP succeeds");
+        }
+    }
+
     // Create and start the client.
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
 

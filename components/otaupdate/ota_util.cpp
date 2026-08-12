@@ -436,6 +436,7 @@ esp_err_t ota_https_update_device(const char *buildflags)
     esp_err_t ota_write_err = ESP_OK;
     mbedtls_sha256_context ctx;
     char *upgrade_data_buf = nullptr;
+    esp_http_client_handle_t client = nullptr;
 
     esp_http_client_config_t* config = (esp_http_client_config_t*)calloc(1, sizeof(esp_http_client_config_t));
     std::string fwfile = ad2_string_printf(CONFIG_FIRMWARE_UPGRADE_URL_FMT, buildflags);
@@ -443,9 +444,16 @@ esp_err_t ota_https_update_device(const char *buildflags)
     config->timeout_ms = OTA_SOCKET_TIMEOUT;
     config->transport_type = HTTP_TRANSPORT_OVER_SSL;
     config->event_handler = _http_event_handler;
+    ad2_configure_http_client_tls(config);
 
+    if (!hal_wait_for_time_sync(30000)) {
+        ESP_LOGE(TAG, "%s: Secure update refused because system time is not synchronized", __func__);
+        free(config);
+        return ESP_ERR_TIMEOUT;
+    }
 
-    esp_http_client_handle_t client = esp_http_client_init(config);
+    client = esp_http_client_init(config);
+    free(config);
     if (client == NULL) {
         ESP_LOGE(TAG, "%s: Failed to initialise HTTP connection", __func__);
         goto clean_up;
@@ -618,6 +626,13 @@ esp_err_t ota_https_read_version_info(char **version_info, unsigned int *version
     config->timeout_ms = OTA_SOCKET_TIMEOUT;
     config->transport_type = HTTP_TRANSPORT_OVER_SSL;
     config->event_handler = _http_event_handler;
+    ad2_configure_http_client_tls(config);
+
+    if (!hal_wait_for_time_sync(30000)) {
+        ESP_LOGE(TAG, "%s: Secure version check refused because system time is not synchronized", __func__);
+        free(config);
+        return ESP_ERR_TIMEOUT;
+    }
 
     esp_http_client_handle_t client = esp_http_client_init(config);
     free(config);

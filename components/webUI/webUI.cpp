@@ -30,6 +30,7 @@ static const char *TAG = "WEBUI";
 
 // AlarmDecoder std includes
 #include <algorithm>
+#include <ctime>
 #include "alarmdecoder_main.h"
 
 // esp component includes
@@ -887,6 +888,8 @@ static esp_err_t webui_system_handler(httpd_req_t *req)
     cJSON_AddStringToObject(network, "mode", network_mode_name);
     cJSON_AddStringToObject(network, "ip_address", local_ip.c_str());
     cJSON_AddBoolToObject(network, "connected", hal_get_network_connected());
+    cJSON_AddBoolToObject(network, "time_synchronized", hal_time_is_synchronized());
+    cJSON_AddNumberToObject(network, "unix_time", (double)time(nullptr));
     cJSON_AddStringToObject(network, "web_protocol", webui_server_uses_tls ? "HTTPS" : "HTTP");
     cJSON_AddNumberToObject(network, "web_port", webui_server_uses_tls ? 443 : 80);
     cJSON_AddItemToObject(root, "network", network);

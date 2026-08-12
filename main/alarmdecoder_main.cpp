@@ -1006,10 +1006,6 @@ extern "C" {
         ad2_printf_host(false, "\r\n");
         ad2_printf_host(true, AD2_SIGNON, TAG, ad2_firmware_version(), FIRMWARE_BUILDFLAGS);
 
-#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-        ESP_ERROR_CHECK(esp_tls_init_global_ca_store());
-#endif
-
         // dump the hardware info to the console
         hal_dump_hw_info();
 
@@ -1221,6 +1217,13 @@ extern "C" {
             hal_init_wifi(netmode_args);
         }
 #endif
+
+        // Certificate validity checks require trusted wall-clock time. The
+        // managed SNTP service starts now and completes after the interface
+        // receives an address; secure clients wait for its readiness bit.
+        if (net_mode != 'N') {
+            hal_init_time_sync();
+        }
 
 #if 0 // FIXME add build switch for release builds.
         // AlarmDecoder callback wire up for testing.

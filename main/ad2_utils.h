@@ -196,6 +196,8 @@ typedef void (*ad2_http_sendQ_ready_cb_t)(esp_http_client_handle_t, esp_http_cli
 typedef bool (*ad2_http_sendQ_done_cb_t)(esp_err_t, esp_http_client_handle_t, esp_http_client_config_t*);
 void ad2_init_http_sendQ();
 bool ad2_add_http_sendQ(esp_http_client_config_t*, ad2_http_sendQ_ready_cb_t, ad2_http_sendQ_done_cb_t);
+bool ad2_http_client_uses_tls(const esp_http_client_config_t *client_config);
+void ad2_configure_http_client_tls(esp_http_client_config_t *client_config);
 
 
 #endif /* _AD2_UTILS_H */

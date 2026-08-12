@@ -2044,6 +2044,25 @@ typedef struct sendQ_event_data {
     ad2_http_sendQ_done_cb_t done;
 } sendQ_event_data_t;
 
+bool ad2_http_client_uses_tls(const esp_http_client_config_t *client_config)
+{
+    if (!client_config) {
+        return false;
+    }
+    if (client_config->transport_type == HTTP_TRANSPORT_OVER_SSL) {
+        return true;
+    }
+    return client_config->url && strncasecmp(client_config->url, "https://", 8) == 0;
+}
+
+void ad2_configure_http_client_tls(esp_http_client_config_t *client_config)
+{
+    if (ad2_http_client_uses_tls(client_config)) {
+        client_config->crt_bundle_attach = esp_crt_bundle_attach;
+        client_config->skip_cert_common_name_check = false;
+    }
+}
+
 /**
  * @brief HTTP sendQ consumer
  *
@@ -2066,7 +2085,14 @@ static void _http_sendQ_consumer_task(void *pvParameters)
 
                 // Initialize a new http client using the client_config..
                 esp_http_client_handle_t http_client;
+                ad2_configure_http_client_tls(event_data.client_config);
                 http_client = esp_http_client_init(event_data.client_config);
+
+                if (!http_client) {
+                    ESP_LOGE(TAG, "Unable to initialize queued HTTP client");
+                    event_data.done(ESP_FAIL, nullptr, event_data.client_config);
+                    continue;
+                }
 
                 // Set the user agent.
                 esp_chip_info_t chip_info;
@@ -2079,6 +2105,14 @@ static void _http_sendQ_consumer_task(void *pvParameters)
                 // notify compoenet we are about to send and allow to
                 // update connection details including post data etc.
                 event_data.ready(http_client, event_data.client_config);
+
+                if (ad2_http_client_uses_tls(event_data.client_config) &&
+                        !hal_wait_for_time_sync(30000)) {
+                    ESP_LOGE(TAG, "Secure HTTP request refused: system time is not synchronized");
+                    event_data.done(ESP_ERR_TIMEOUT, http_client, event_data.client_config);
+                    esp_http_client_cleanup(http_client);
+                    continue;
+                }
 
                 // Allow for multiple requests on a single connection.
                 // TODO: sanity checking. Put back in sendQ for others to get some time? Memory.

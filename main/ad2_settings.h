@@ -100,6 +100,10 @@
 // @brief opt-in persistent diagnostic log on the mounted uSD card
 #define SDLOG_CONFIG_KEY      "sdlog"
 
+// @brief NTP server used to establish certificate-validation time after boot
+#define TIMESERVER_CONFIG_KEY "timeserver"
+#define AD2_DEFAULT_TIME_SERVER "pool.ntp.org"
+
 // @brief bounded diagnostic log sizes and uSD paths
 #define AD2_LOG_HISTORY_SIZE 64
 #define AD2_SD_LOG_MAX_BYTES (512 * 1024)
