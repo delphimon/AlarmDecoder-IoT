@@ -115,13 +115,17 @@ button:focus-visible { outline: 3px solid rgba(92, 200, 255, .55); outline-offse
 .emergency.tap-2 { border-color: var(--red); background: rgba(255,102,117,.14); }
 
 .text-button { border: 0; padding: 7px 10px; border-radius: 8px; background: var(--surface-2); color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 800; }
+.activity-actions { display: flex; gap: 7px; }
 .activity-list { list-style: none; margin: 0; padding: 0; }
 .activity-item { display: grid; grid-template-columns: 12px 1fr auto; gap: 13px; padding: 14px 4px; border-top: 1px solid var(--line); }
 .activity-item:first-child { border-top: 0; }
 .activity-dot { width: 9px; height: 9px; margin-top: 5px; border: 2px solid var(--accent); border-radius: 50%; }
 .activity-item.alert .activity-dot { border-color: var(--red); background: rgba(255,102,117,.35); }
 .activity-body b { display: block; font-size: 13px; }
-.activity-body p { margin: 4px 0 0; color: var(--muted); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+.activity-body p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.activity-technical { margin-top: 7px; color: var(--muted); font-size: 10px; }
+.activity-technical summary { width: fit-content; cursor: pointer; color: var(--accent); }
+.activity-technical p { margin-top: 5px; font: 10px/1.5 "SFMono-Regular", Consolas, monospace; }
 .activity-meta { color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; }
 .activity-meta b, .activity-meta time, .activity-meta span { display: block; }
 .activity-meta b { color: var(--text); font-size: 11px; }
@@ -195,6 +199,8 @@ button:focus-visible { outline: 3px solid rgba(92, 200, 255, .55); outline-offse
   .key-grid { padding: 16px; gap: 8px; }
   .keypad-display { padding: 22px; }
   .activity-item { grid-template-columns: 11px 1fr; }
+  .activity-panel .section-heading { align-items: flex-start; }
+  .activity-actions { flex-direction: column; }
   .activity-meta { grid-column: 2; text-align: left; }
   .activity-meta time, .activity-meta span { display: inline; margin: 4px 8px 0 0; }
   .zones { grid-template-columns: 1fr; }

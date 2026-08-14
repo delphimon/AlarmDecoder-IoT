@@ -48,6 +48,7 @@ class ReleasePackagingTests(unittest.TestCase):
             for filename in FIRMWARE_FILES:
                 self.assertTrue((firmware_dir / filename).is_file(), filename)
             self.assertTrue((firmware_dir / "sd-card" / "www" / "app.html").is_file())
+            self.assertTrue((firmware_dir / "sd-card" / "www" / "activity.js").is_file())
 
             checksum_lines = (output_dir / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
             self.assertGreater(len(checksum_lines), len(FIRMWARE_FILES))

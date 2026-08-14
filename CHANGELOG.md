@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1124` for the summarized activity feed build.
+- [x] WEBUI/ACTIVITY: combine correlated zone, ready, keypad-display, and beep notifications from the same panel burst into one meaningful event; add clear zone-fault/ready-state descriptions, displayed-versus-raw counts, per-event technical disclosure, and an opt-in raw update view while retaining exact local timestamps.
+- [x] CI/TEST: add four executable browser-logic regressions for burst consolidation, zone/ready descriptions, raw-update preservation, and asset ordering; expand the host suite to 54 checks and verify a clean ESP-IDF 6 firmware/SPIFFS build plus the 42-file release package.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1123` for the hardware-discovered ESP-IDF 6 Ethernet correction.
 - [x] NETWORK/ETHERNET: restore the OLIMEX ESP32-PoE-ISO RMII 50 MHz clock output on GPIO 17 through project-owned configuration after ESP-IDF 6 removed the former framework Kconfig controls.
 - [x] RELIABILITY: report and clean up an EMAC installation failure instead of aborting into a coredump/reboot loop when Ethernet hardware initialization fails.

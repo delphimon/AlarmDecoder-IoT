@@ -42,7 +42,7 @@ def main() -> int:
         errors += 1
 
     web_root = ROOT / "contrib" / "webUI" / "flash-drive" / "www"
-    required_web_files = ("app.html", "app.css", "app.js", "index.html", "alarmdecoder.yaml")
+    required_web_files = ("activity.js", "app.html", "app.css", "app.js", "index.html", "alarmdecoder.yaml")
     for filename in required_web_files:
         if not (web_root / filename).is_file():
             fail(f"required web asset is missing: {filename}")

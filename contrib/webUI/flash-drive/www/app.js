@@ -2,6 +2,7 @@
   "use strict";
 
   const byId = id => document.getElementById(id);
+  const activity = window.AD2Activity;
   const query = new URLSearchParams(window.location.search);
   const clampSlot = (name, maximum) => {
     const value = Number.parseInt(query.get(name) || "0", 10);
@@ -20,6 +21,7 @@
     reconnectTimer: null,
     state: null,
     history: [],
+    showTechnicalActivity: false,
     system: null,
     firmware: null,
     diagnosticsLoaded: false,
@@ -310,26 +312,6 @@
     });
   }
 
-  function eventLabel(event) {
-    return ({
-      "ARMED": "System armed",
-      "DISARMED": "System disarmed",
-      "POWER": "Power state changed",
-      "READY": "Ready state changed",
-      "ALARM": "Alarm state changed",
-      "FIRE": "Fire state changed",
-      "ZONE": "Zone state changed",
-      "LOW BATTERY": "Battery state changed",
-      "CHIME": "Chime state changed",
-      "BEEPS": "Keypad beeps changed",
-      "PROG. MODE": "Programming state changed",
-      "ALPHA MSG.": "Keypad display updated",
-      "CONTACT ID": "Panel event received",
-      "PANIC": "Panic event received",
-      "EXIT": "Exit state changed"
-    }[event] || event || "Panel update");
-  }
-
   function relativeTime(uptime) {
     const seconds = Math.max(0, Math.floor((app.serverUptime - Number(uptime || 0)) / 1000));
     if (seconds < 5) return "just now";
@@ -355,8 +337,14 @@
   function renderHistory() {
     const list = byId("activityList");
     list.textContent = "";
-    byId("activityCount").textContent = String(app.history.length);
-    if (!app.history.length) {
+    const entries = activity.summarizeHistory(app.history, app.showTechnicalActivity).slice(0, 64);
+    byId("activityCount").textContent = String(entries.length);
+    const summary = byId("activitySummary");
+    summary.textContent = app.showTechnicalActivity ?
+      "Showing all " + app.history.length + " raw panel updates. Exact times use this browser's local clock." :
+      "Showing " + entries.length + " meaningful " + (entries.length === 1 ? "event" : "events") +
+        " from " + app.history.length + " panel updates. Related updates are combined; exact times use this browser's local clock.";
+    if (!entries.length) {
       const empty = document.createElement("li");
       empty.className = "empty-state";
       empty.textContent = "No activity recorded yet.";
@@ -364,19 +352,33 @@
       return;
     }
 
-    app.history.slice(0, 64).forEach(entry => {
+    entries.forEach(entry => {
       const item = document.createElement("li");
-      const alert = /ALARM|FIRE|PANIC|LOW BATTERY/.test(entry.event || "");
+      const alert = /ALARM|FIRE|PANIC|LOW BATTERY/.test(entry.event || "") || /^FAULT\s/i.test(entry.alpha || "");
       item.className = "activity-item" + (alert ? " alert" : "");
       const dot = document.createElement("span");
       dot.className = "activity-dot";
       const body = document.createElement("div");
       body.className = "activity-body";
       const title = document.createElement("b");
-      title.textContent = eventLabel(entry.event);
+      const description = app.showTechnicalActivity ? {
+        title: activity.eventLabel(entry.event),
+        detail: entry.alpha || (entry.zone ? "Zone " + entry.zone : "State updated")
+      } : activity.describe(entry);
+      title.textContent = description.title;
       const detail = document.createElement("p");
-      detail.textContent = entry.alpha || (entry.zone ? "Zone " + entry.zone : "State updated");
+      detail.textContent = description.detail;
       body.append(title, detail);
+      if (!app.showTechnicalActivity && entry.update_count > 1) {
+        const technical = document.createElement("details");
+        technical.className = "activity-technical";
+        const technicalSummary = document.createElement("summary");
+        technicalSummary.textContent = "Combined " + entry.update_count + " related panel updates";
+        const technicalEvents = document.createElement("p");
+        technicalEvents.textContent = entry.events.map(activity.eventLabel).join(" · ");
+        technical.append(technicalSummary, technicalEvents);
+        body.appendChild(technical);
+      }
       const meta = document.createElement("div");
       meta.className = "activity-meta";
       const relative = document.createElement("b");
@@ -547,6 +549,12 @@
     button.addEventListener("click", () => sendCommand(button.dataset.command));
   });
   byId("refreshButton").addEventListener("click", () => sendRaw("!SYNC:" + partID + "," + codeID));
+  byId("activityMode").addEventListener("click", event => {
+    app.showTechnicalActivity = !app.showTechnicalActivity;
+    event.currentTarget.setAttribute("aria-pressed", String(app.showTechnicalActivity));
+    event.currentTarget.textContent = app.showTechnicalActivity ? "Show summaries" : "Show technical updates";
+    renderHistory();
+  });
   byId("reloadHistory").addEventListener("click", () => sendRaw("!HISTORY:64"));
   byId("reloadDiagnostics").addEventListener("click", () => loadDiagnostics(true));
   byId("refreshFirmware").addEventListener("click", () => {

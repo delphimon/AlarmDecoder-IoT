@@ -78,9 +78,12 @@
         <section class="panel activity-panel">
           <div class="section-heading">
             <div><p class="eyebrow">This boot session</p><h2>Recent activity</h2></div>
-            <button id="reloadHistory" class="text-button">Reload</button>
+            <div class="activity-actions">
+              <button id="activityMode" class="text-button" type="button" aria-pressed="false">Show technical updates</button>
+              <button id="reloadHistory" class="text-button" type="button">Reload</button>
+            </div>
           </div>
-          <p class="section-note">The device retains the latest 64 events until it restarts. Exact times use this browser's local clock.</p>
+          <p id="activitySummary" class="section-note">Related panel updates are combined into meaningful events. Exact times use this browser's local clock.</p>
           <ol id="activityList" class="activity-list"><li class="empty-state">No activity recorded yet.</li></ol>
         </section>
       </section>
@@ -193,6 +196,7 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
+  <script src="activity.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
