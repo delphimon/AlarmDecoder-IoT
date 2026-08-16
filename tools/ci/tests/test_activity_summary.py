@@ -64,6 +64,20 @@ class ActivitySummaryTests(unittest.TestCase):
         self.assertEqual(fault, {"title": "Zone 04 faulted", "detail": "Motion Detector"})
         self.assertEqual(ready, {"title": "System ready to arm", "detail": "Disarmed · Bypass active"})
 
+    def test_fixed_width_alpha_padding_does_not_defeat_grouping(self) -> None:
+        history = [
+            {"event": "ZONE", "uptime_ms": 3000, "partition": 1, "alpha": "FAULT 04 MOTION DETECTOR   "},
+            {"event": "READY", "uptime_ms": 2000, "partition": 1, "alpha": "FAULT 04 MOTION DETECTOR       "},
+            {"event": "ALPHA MSG.", "uptime_ms": 1000, "partition": 1, "alpha": "FAULT 04 MOTION DETECTOR"},
+        ]
+        summaries = self.run_activity(
+            "activity.summarizeHistory(" + json.dumps(history) + ", false)"
+        )
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0]["alpha"], "FAULT 04 MOTION DETECTOR")
+        self.assertEqual(summaries[0]["update_count"], 3)
+
     def test_technical_mode_preserves_every_raw_update(self) -> None:
         history = [
             {"event": "ZONE", "uptime_ms": 2000, "partition": 1, "alpha": "FAULT 01 FRONT DOOR"},

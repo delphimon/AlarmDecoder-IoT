@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased] Open issues
+- [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1125` for the hardware-discovered activity consolidation correction.
+- [x] WEBUI/ACTIVITY: normalize fixed-width AlarmDecoder Alpha padding before correlating events; `AD2IOT-1124` displayed trimmed descriptions but treated the underlying padded strings as distinct, leaving the live feed at 64 summaries for 64 updates.
+- [x] CI/TEST: add a hardware-derived regression proving differently padded zone, ready, and display strings collapse into one summary; expand the host suite to 55 checks.
+- [x] TEST/HARDWARE: inspect the authenticated `AD2IOT-1124` `/api/history` response over trusted HTTPS and confirm all 64 retained Alpha fields carry fixed-width trailing padding, directly reproducing the consolidation mismatch without exposing credentials.
 - [x] Release identity: bump firmware and ESP application metadata to `AD2IOT-1124` for the summarized activity feed build.
 - [x] WEBUI/ACTIVITY: combine correlated zone, ready, keypad-display, and beep notifications from the same panel burst into one meaningful event; add clear zone-fault/ready-state descriptions, displayed-versus-raw counts, per-event technical disclosure, and an opt-in raw update view while retaining exact local timestamps.
 - [x] CI/TEST: add four executable browser-logic regressions for burst consolidation, zone/ready descriptions, raw-update preservation, and asset ordering; expand the host suite to 54 checks and verify a clean ESP-IDF 6 firmware/SPIFFS build plus the 42-file release package.

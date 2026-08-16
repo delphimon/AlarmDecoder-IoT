@@ -41,8 +41,12 @@
       (_match, prefix, letter) => prefix + letter.toUpperCase());
   }
 
+  function normalizeAlpha(value) {
+    return String(value || "").trim().replace(/\s+/g, " ");
+  }
+
   function describe(entry) {
-    const alpha = String(entry.alpha || "").trim();
+    const alpha = normalizeAlpha(entry.alpha);
     const fault = alpha.match(/^FAULT\s+(\d+)\s*(.*)$/i);
     if (fault) {
       return {
@@ -83,7 +87,9 @@
 
     const summaries = [];
     entries.forEach(entry => {
-      const alpha = String(entry.alpha || "").trim();
+      // Alarm-panel Alpha fields are fixed width. Normalize their invisible
+      // padding before comparing otherwise identical state notifications.
+      const alpha = normalizeAlpha(entry.alpha);
       const previous = summaries[summaries.length - 1];
       const sameBurst = previous && alpha && previous.alpha === alpha &&
         Number(previous.partition || 0) === Number(entry.partition || 0) &&
@@ -91,6 +97,7 @@
 
       if (!sameBurst) {
         summaries.push(Object.assign({}, entry, {
+          alpha,
           events: [entry.event || ""],
           update_count: 1,
           technical: false,
@@ -113,5 +120,5 @@
     });
   }
 
-  return { MERGE_WINDOW_MS, describe, eventLabel, summarizeHistory };
+  return { MERGE_WINDOW_MS, describe, eventLabel, normalizeAlpha, summarizeHistory };
 }));
